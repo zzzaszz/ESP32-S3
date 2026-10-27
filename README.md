@@ -16,10 +16,17 @@
 
 本轮已完成固件侧页面改造：使用 Noto Sans SC 16px LVGL 子集字体（仅含 UI 所需字形，许可文件随仓库保留），标题、状态和更新时间改为中文；两台设备改为 216 × 96 的固定行布局，百分比、状态和数据年龄分别占用固定区域。固件已在本机按目标 FQBN 编译通过，但尚未上传或上板实测，下面的实机验收项仍保持未完成。
 
-| 设备 | 接口及来源 | 上一轮实测结果 | 验证依据 |
+### 当前支持设备
+
+当前采集桥只识别下表中的设备和显示主机，不会把任意蓝牙电池设备或相似型号自动当作受支持设备：
+
+| 设备 | 识别方式 | 当前支持内容 | 协议编号 / 已记录结果 |
 | --- | --- | --- | --- |
-| HyperX Cloud III S Wireless | USB 接收器 `03F0:02CC`，HID GET 查询 | 98%，未充电 | `GET 06 reply=98`、`GET 48 reply=0`、`ACK BAT2 0 98` |
-| Logitech PRO Wireless | USB 接收器 `046D:C539`，G HUB 本地 WebSocket | 71%，未充电 | `ACK BAT2 1 71` |
+| HyperX Cloud III S Wireless | USB 2.4G 接收器 `03F0:02CC`，HID GET 查询 | 电量、充电状态、连接状态；异常时发送未知值 | `BAT2 device=0`；上一轮 `98%`、未充电 |
+| Logitech PRO Wireless | G HUB 本地 WebSocket，匹配 `deviceModel=pro_wireless_mouse` | 电量、连接状态；G HUB 没有充电字段时使用 `charging=-1` | `BAT2 device=1`；上一轮 `71%`、未充电 |
+| Waveshare ESP32-S3-Touch-LCD-2.8 | ST7789 240 × 320，目标 FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc` | 接收 `BAT1`/`BAT2`，USB 串口和 Wi-Fi HTTP，LVGL 页面显示 | 当前仅完成离线编译，尚未连接实机 |
+
+暂不支持：其他 HyperX 型号、其他 Logitech 鼠标、直接从 ESP32 BLE 电池服务读取，以及未经适配的第三方接收器。当前方案依赖 Windows 访问专用接收器或 G HUB；电脑关机后不得继续把旧数值标成实时电量。
 
 表中数值是上一轮测试时的读数，不是此刻电量。尚未完成屏幕实物显示、中文排版、充电/掉线切换和 Wi-Fi 全链路验收。重新拉取仓库不会自动启动采集进程。
 
@@ -32,6 +39,24 @@
 | `arduino-cli board list` | 当前 Windows 串口枚举状态 | 不能把蓝牙虚拟串口当作 ESP32-S3 |
 
 临时 smoke 日志默认在脚本结束时删除；需要长期保留采集过程时，显式给 `BatteryBridge.ps1` 传入 `-LogPath`，并只记录不含 token 的 transcript。
+
+### 本次自测与待优化点
+
+2026-10-27 在本机运行 `windows/Run-OfflineChecks.ps1 -BuildFirmware`，结果如下：
+
+- 7 个 PowerShell 脚本解析通过；页面中文字符 33 个，字体缺字 0。
+- 参数拒绝测试 7 个用例通过，`BAT2` ACK 文本派生 2 条通过。
+- HTTP smoke test 验证了带 token、不带 token，以及首条请求返回 HTTP 500 后继续发送第二条；PID、停止文件和临时日志均完成清理。
+- Arduino CLI 固件构建通过：程序 `1,186,968` 字节（90%），全局变量 `114,764` 字节（35%）。
+- 本机未启动 G HUB，采集桥按预期产生 `connected=0`、`charging=-1` 的未知帧；未发现 ESP32-S3 串口，因此没有执行真实串口 ACK、烧录、屏幕、Wi-Fi 或长时间运行测试。
+
+待优化点按优先级排列：
+
+1. 接入真实 ESP32-S3，完成双设备串口 ACK、屏幕文字/颜色/裁切、顶部 Wi-Fi 状态、mDNS、token 和断线重连的端到端验收。
+2. 增加 HID 和 G HUB 的固定测试夹具，覆盖真实电量、充电中、充满、设备离线和充电字段缺失等成功路径；目前离线 smoke test 主要覆盖未知帧和传输错误。
+3. 增加目标屏幕截图或像素级回归检查，自动发现中文缺字、长型号溢出、`100%` 重叠和状态刷新跳动。
+4. 做至少 2 小时的 USB/Wi-Fi 连续运行和断开重连测试，记录堆内存、请求超时、数据年龄和串口占用，确认不会逐轮增长。
+5. 根据实物硬件版本补齐 V1/V2 触控驱动和亮度/熄屏交互，目前亮度可通过串口设置，触控仍未启用。
 
 ## 架构与边界
 

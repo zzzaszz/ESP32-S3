@@ -1,5 +1,6 @@
 #include "LVGL_Driver.h"
 #include "Display_ST7789.h"
+#include "Touch_Driver.h"
 
 #include <esp_err.h>
 #include <esp_timer.h>
@@ -29,6 +30,13 @@ void Lvgl_Init(void) {
   display.flush_cb = flushDisplay;
   display.draw_buf = &drawBuffer;
   lv_disp_drv_register(&display);
+
+  TouchDriver_Init();
+  static lv_indev_drv_t touch;
+  lv_indev_drv_init(&touch);
+  touch.type = LV_INDEV_TYPE_POINTER;
+  touch.read_cb = TouchDriver_Read;
+  lv_indev_drv_register(&touch);
 
   esp_timer_create_args_t tickTimerArgs = {};
   tickTimerArgs.callback = advanceLvglTick;

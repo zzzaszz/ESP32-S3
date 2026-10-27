@@ -22,6 +22,19 @@ struct DeviceState {
   uint32_t updatedAt = 0;
 };
 
+struct PerformanceState {
+  bool seen = false;
+  int cpu = -1;
+  int memory = -1;
+  int gpu = -1;
+  int gpuTemperature = -1;
+  uint32_t uploadKbps = 0;
+  uint32_t downloadKbps = 0;
+  uint32_t diskFreeGb = 0;
+  uint32_t uptimeSeconds = 0;
+  uint32_t updatedAt = 0;
+};
+
 static const DeviceDefinition devices[] = {
     {"HyperX Cloud III S", &lv_font_montserrat_14, 0x42D6B5},
     {"罗技 PRO Wireless", &battery_font_16, 0x64B5F6},
@@ -35,6 +48,14 @@ static lv_obj_t *ages[2] = {};
 static lv_obj_t *sourceLabel = nullptr;
 static lv_obj_t *networkLabel = nullptr;
 static lv_obj_t *headerNetworkLabel = nullptr;
+static lv_obj_t *dashboardView = nullptr;
+static lv_obj_t *monitorView = nullptr;
+static lv_obj_t *dashboardScroll = nullptr;
+static lv_obj_t *monitorScroll = nullptr;
+static lv_obj_t *lockOverlay = nullptr;
+static lv_obj_t *performanceLabels[8] = {};
+static PerformanceState performance;
+static bool monitorVisible = false;
 static uint32_t lastAgeRefresh = 0;
 static const uint32_t kText = 0xF2F5F4;
 static const uint32_t kMuted = 0x91A3A5;
@@ -42,6 +63,75 @@ static const uint32_t kWarning = 0xF2C14E;
 static const uint32_t kDanger = 0xE76F51;
 
 static const lv_font_t *const kChineseFont = &battery_font_16;
+
+static void showDashboard(lv_event_t *) {
+  monitorVisible = false;
+  lv_obj_add_flag(monitorView, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(dashboardView, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void showMonitor(lv_event_t *) {
+  monitorVisible = true;
+  lv_obj_add_flag(dashboardView, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(monitorView, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void lockScreen(lv_event_t *) {
+  lv_obj_clear_flag(lockOverlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void unlockScreen(lv_event_t *) {
+  lv_obj_add_flag(lockOverlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static lv_obj_t *createActionButton(lv_obj_t *parent, const char *text, lv_coord_t x,
+                                    lv_event_cb_t callback) {
+  lv_obj_t *button = lv_btn_create(parent);
+  lv_obj_set_pos(button, x, 3);
+  lv_obj_set_size(button, 104, 36);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x263840), 0);
+  lv_obj_set_style_border_width(button, 1, 0);
+  lv_obj_set_style_border_color(button, lv_color_hex(0x3B5962), 0);
+  lv_obj_set_style_radius(button, 6, 0);
+  lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *label = lv_label_create(button);
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_color(label, lv_color_hex(kText), 0);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+  lv_obj_center(label);
+  return button;
+}
+
+static void setPerformanceLabel(lv_obj_t *label, const char *name, int value,
+                                const char *unit) {
+  if (value < 0) lv_label_set_text_fmt(label, "%s       -- %s", name, unit);
+  else lv_label_set_text_fmt(label, "%s       %d %s", name, value, unit);
+}
+
+static void updatePerformanceView(void) {
+  if (!performance.seen) {
+    for (lv_obj_t *label : performanceLabels) {
+      if (label) lv_label_set_text(label, "WAITING FOR PC DATA");
+    }
+    return;
+  }
+  setPerformanceLabel(performanceLabels[0], "CPU", performance.cpu, "%");
+  setPerformanceLabel(performanceLabels[1], "MEM", performance.memory, "%");
+  setPerformanceLabel(performanceLabels[2], "GPU", performance.gpu, "%");
+  setPerformanceLabel(performanceLabels[3], "GPU TEMP", performance.gpuTemperature, "C");
+  lv_label_set_text_fmt(performanceLabels[4], "NET UP    %lu KB/s",
+                        static_cast<unsigned long>(performance.uploadKbps));
+  lv_label_set_text_fmt(performanceLabels[5], "NET DOWN  %lu KB/s",
+                        static_cast<unsigned long>(performance.downloadKbps));
+  lv_label_set_text_fmt(performanceLabels[6], "DISK FREE %lu GB",
+                        static_cast<unsigned long>(performance.diskFreeGb));
+  const uint32_t days = performance.uptimeSeconds / 86400;
+  const uint32_t hours = (performance.uptimeSeconds / 3600) % 24;
+  const uint32_t minutes = (performance.uptimeSeconds / 60) % 60;
+  lv_label_set_text_fmt(performanceLabels[7], "UPTIME    %lud %02lu:%02lu",
+                        static_cast<unsigned long>(days), static_cast<unsigned long>(hours),
+                        static_cast<unsigned long>(minutes));
+}
 
 static lv_obj_t *createLabel(lv_obj_t *parent, const char *text, uint32_t color,
                              const lv_font_t *font, lv_coord_t x, lv_coord_t y,
@@ -167,14 +257,95 @@ void BatteryDashboard_Create(void) {
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
-  createLabel(screen, "设备电量", kText, kChineseFont, 12, 8);
-  headerNetworkLabel = createLabel(screen, "Wi-Fi 未连接", kMuted, kChineseFont, 108, 8, 120);
+  dashboardView = lv_obj_create(screen);
+  lv_obj_set_size(dashboardView, 240, 320);
+  lv_obj_set_pos(dashboardView, 0, 0);
+  lv_obj_clear_flag(dashboardView, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(dashboardView, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(dashboardView, 0, 0);
+  lv_obj_set_style_pad_all(dashboardView, 0, 0);
+
+  createLabel(dashboardView, "设备电量", kText, kChineseFont, 12, 8);
+  headerNetworkLabel = createLabel(dashboardView, "Wi-Fi 未连接", kMuted, kChineseFont, 108, 8, 120);
   lv_obj_set_style_text_align(headerNetworkLabel, LV_TEXT_ALIGN_RIGHT, 0);
 
-  createDeviceRow(screen, 0, 52);
-  createDeviceRow(screen, 1, 156);
-  sourceLabel = createLabel(screen, "数据来源 --", kMuted, kChineseFont, 12, 260, 216);
-  networkLabel = createLabel(screen, "Wi-Fi 未连接", kMuted, kChineseFont, 12, 282, 216);
+  dashboardScroll = lv_obj_create(dashboardView);
+  lv_obj_set_pos(dashboardScroll, 0, 42);
+  lv_obj_set_size(dashboardScroll, 240, 232);
+  lv_obj_set_style_bg_opa(dashboardScroll, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(dashboardScroll, 0, 0);
+  lv_obj_set_style_pad_all(dashboardScroll, 0, 0);
+  lv_obj_set_scroll_dir(dashboardScroll, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(dashboardScroll, LV_SCROLLBAR_MODE_AUTO);
+
+  createDeviceRow(dashboardScroll, 0, 8);
+  createDeviceRow(dashboardScroll, 1, 112);
+  sourceLabel = createLabel(dashboardScroll, "数据来源 --", kMuted, kChineseFont, 12, 220, 216);
+  networkLabel = createLabel(dashboardScroll, "Wi-Fi 未连接", kMuted, kChineseFont, 12, 244, 216);
+
+  lv_obj_t *dashboardNav = lv_obj_create(dashboardView);
+  lv_obj_set_pos(dashboardNav, 0, 278);
+  lv_obj_set_size(dashboardNav, 240, 42);
+  lv_obj_set_style_bg_opa(dashboardNav, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(dashboardNav, lv_color_hex(0x10171C), 0);
+  lv_obj_set_style_border_width(dashboardNav, 0, 0);
+  lv_obj_set_style_pad_all(dashboardNav, 0, 0);
+  createActionButton(dashboardNav, "MONITOR", 8, showMonitor);
+  createActionButton(dashboardNav, "LOCK", 120, lockScreen);
+
+  monitorView = lv_obj_create(screen);
+  lv_obj_set_size(monitorView, 240, 320);
+  lv_obj_set_pos(monitorView, 0, 0);
+  lv_obj_clear_flag(monitorView, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(monitorView, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(monitorView, lv_color_hex(0x10171C), 0);
+  lv_obj_set_style_border_width(monitorView, 0, 0);
+  lv_obj_set_style_pad_all(monitorView, 0, 0);
+  lv_obj_add_flag(monitorView, LV_OBJ_FLAG_HIDDEN);
+  createLabel(monitorView, "PC MONITOR", kText, &lv_font_montserrat_16, 12, 8);
+  monitorScroll = lv_obj_create(monitorView);
+  lv_obj_set_pos(monitorScroll, 0, 42);
+  lv_obj_set_size(monitorScroll, 240, 232);
+  lv_obj_set_style_bg_opa(monitorScroll, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(monitorScroll, 0, 0);
+  lv_obj_set_style_pad_all(monitorScroll, 0, 0);
+  lv_obj_set_scroll_dir(monitorScroll, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(monitorScroll, LV_SCROLLBAR_MODE_AUTO);
+  const char *names[] = {"CPU", "MEM", "GPU", "GPU TEMP", "NET UP", "NET DOWN", "DISK FREE", "UPTIME"};
+  for (size_t i = 0; i < 8; ++i) {
+    performanceLabels[i] = createLabel(monitorScroll, names[i], kText, &lv_font_montserrat_14,
+                                        14, static_cast<lv_coord_t>(10 + i * 28), 210);
+  }
+  lv_obj_t *monitorNav = lv_obj_create(monitorView);
+  lv_obj_set_pos(monitorNav, 0, 278);
+  lv_obj_set_size(monitorNav, 240, 42);
+  lv_obj_set_style_bg_opa(monitorNav, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(monitorNav, lv_color_hex(0x10171C), 0);
+  lv_obj_set_style_border_width(monitorNav, 0, 0);
+  lv_obj_set_style_pad_all(monitorNav, 0, 0);
+  createActionButton(monitorNav, "BACK", 8, showDashboard);
+  createActionButton(monitorNav, "LOCK", 120, lockScreen);
+
+  lockOverlay = lv_btn_create(screen);
+  lv_obj_set_pos(lockOverlay, 0, 0);
+  lv_obj_set_size(lockOverlay, 240, 320);
+  lv_obj_set_style_bg_color(lockOverlay, lv_color_hex(0x10171C), 0);
+  lv_obj_set_style_bg_opa(lockOverlay, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(lockOverlay, 0, 0);
+  lv_obj_set_style_radius(lockOverlay, 0, 0);
+  lv_obj_add_event_cb(lockOverlay, unlockScreen, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *lockTitle = lv_label_create(lockOverlay);
+  lv_label_set_text(lockTitle, "SCREEN LOCKED");
+  lv_obj_set_style_text_color(lockTitle, lv_color_hex(kText), 0);
+  lv_obj_set_style_text_font(lockTitle, &lv_font_montserrat_16, 0);
+  lv_obj_align(lockTitle, LV_ALIGN_CENTER, 0, -18);
+  lv_obj_t *lockHint = lv_label_create(lockOverlay);
+  lv_label_set_text(lockHint, "TAP TO UNLOCK");
+  lv_obj_set_style_text_color(lockHint, lv_color_hex(kMuted), 0);
+  lv_obj_set_style_text_font(lockHint, &lv_font_montserrat_12, 0);
+  lv_obj_align(lockHint, LV_ALIGN_CENTER, 0, 18);
+  lv_obj_add_flag(lockOverlay, LV_OBJ_FLAG_HIDDEN);
+  updatePerformanceView();
   BatteryDashboard_Loop();
 }
 
@@ -196,6 +367,7 @@ void BatteryDashboard_Loop(void) {
   if (now - lastAgeRefresh < 1000) return;
   lastAgeRefresh = now;
   for (size_t i = 0; i < 2; ++i) updateDeviceRow(i, now);
+  updatePerformanceView();
 }
 
 void BatteryDashboard_Update(int level, bool connected, bool charging, bool fresh) {
@@ -212,4 +384,20 @@ void BatteryDashboard_UpdateDevice(int device, int level, bool connected, int ch
   state.charging = charging;
   if (fresh) state.updatedAt = millis();
   updateDeviceRow(static_cast<size_t>(device), millis());
+}
+
+void BatteryDashboard_UpdatePerformance(int cpu, int memory, int gpu, int gpuTemperature,
+                                        uint32_t uploadKbps, uint32_t downloadKbps,
+                                        uint32_t diskFreeGb, uint32_t uptimeSeconds) {
+  performance.seen = true;
+  performance.cpu = cpu;
+  performance.memory = memory;
+  performance.gpu = gpu;
+  performance.gpuTemperature = gpuTemperature;
+  performance.uploadKbps = uploadKbps;
+  performance.downloadKbps = downloadKbps;
+  performance.diskFreeGb = diskFreeGb;
+  performance.uptimeSeconds = uptimeSeconds;
+  performance.updatedAt = millis();
+  updatePerformanceView();
 }

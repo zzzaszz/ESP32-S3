@@ -127,6 +127,52 @@ function Invoke-GHubGet($Socket, [string]$Path) {
     } finally { $cts.Dispose() }
 }
 
+function Get-ComputerPerformance {
+    $cpu = -1; $memory = -1; $gpu = -1; $gpuTemperature = -1
+    $uploadKbps = 0; $downloadKbps = 0; $diskFreeGb = 0; $uptimeSeconds = 0
+    try {
+        $sample = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop
+        $cpu = [Math]::Max(0, [Math]::Min(100, [int][Math]::Round($sample.CounterSamples[0].CookedValue)))
+    } catch { }
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        if ([double]$os.TotalVisibleMemorySize -gt 0) {
+            $memory = [int][Math]::Round((1 - ($os.FreePhysicalMemory / $os.TotalVisibleMemorySize)) * 100)
+            $memory = [Math]::Max(0, [Math]::Min(100, $memory))
+        }
+        $boot = [DateTime]$os.LastBootUpTime
+        $uptimeSeconds = [uint32][Math]::Min([uint64]([uint32]::MaxValue), [Math]::Max(0, ((Get-Date) - $boot).TotalSeconds))
+    } catch { }
+    try {
+        $gpuSamples = @(Get-Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction Stop).CounterSamples |
+            Where-Object InstanceName -Match '_engtype_3D' |
+            Measure-Object -Property CookedValue -Sum
+        if ($gpuSamples.Count -and $gpuSamples.Sum -ge 0) {
+            $gpu = [int][Math]::Max(0, [Math]::Min(100, [Math]::Round($gpuSamples.Sum)))
+        }
+    } catch { }
+    try {
+        $temperatures = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.CurrentTemperature -gt 2000 } |
+            ForEach-Object { [int][Math]::Round(($_.CurrentTemperature / 10) - 273.15) })
+        if ($temperatures.Count) { $gpuTemperature = $temperatures[0] }
+    } catch { }
+    try {
+        $network = @(Get-Counter '\Network Interface(*)\Bytes Received/sec','\Network Interface(*)\Bytes Sent/sec' -ErrorAction Stop).CounterSamples
+        $downloadKbps = [uint32][Math]::Max(0, [Math]::Round((($network | Where-Object Path -Match 'Bytes Received/sec' | Measure-Object CookedValue -Sum).Sum) / 1024))
+        $uploadKbps = [uint32][Math]::Max(0, [Math]::Round((($network | Where-Object Path -Match 'Bytes Sent/sec' | Measure-Object CookedValue -Sum).Sum) / 1024))
+    } catch { }
+    try {
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction Stop
+        if ($disk.FreeSpace -ne $null) { $diskFreeGb = [uint32][Math]::Max(0, [Math]::Round($disk.FreeSpace / 1GB)) }
+    } catch { }
+    [PSCustomObject]@{
+        Cpu = $cpu; Memory = $memory; Gpu = $gpu; GpuTemperature = $gpuTemperature
+        UploadKbps = $uploadKbps; DownloadKbps = $downloadKbps; DiskFreeGb = $diskFreeGb
+        UptimeSeconds = $uptimeSeconds
+    }
+}
+
 $serial = $null
 $transcriptStarted = $false
 try {
@@ -182,8 +228,13 @@ try {
             }
         } catch { Write-Warning ("HyperX unavailable: " + $_.Exception.Message) }
 
+        $performance = Get-ComputerPerformance
+        $performanceFrame = "PERF,{0},{1},{2},{3},{4},{5},{6},{7}" -f `
+            $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
+            $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb,
+            $performance.UptimeSeconds
         $sendFailed = $false
-        foreach ($frame in @("BAT2,1,$level,$connected,$charging", "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging")) {
+        foreach ($frame in @("BAT2,1,$level,$connected,$charging", "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging", $performanceFrame)) {
             try {
                 if ($PanelUrl) {
                     $headers = @{}
@@ -201,10 +252,13 @@ try {
                 } else {
                     $serial.WriteLine($frame)
                     if ($RequireAck) {
-                        if ($frame -notmatch '^BAT2,(\d+),(-?\d+),') {
-                            throw 'Unable to derive expected BAT2 ACK.'
+                        if ($frame -match '^BAT2,(\d+),(-?\d+),') {
+                            $expectedAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
+                        } elseif ($frame -match '^PERF,(-?\d+),(-?\d+),(-?\d+),(-?\d+),') {
+                            $expectedAck = "ACK PERF $($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])"
+                        } else {
+                            throw 'Unable to derive expected ACK.'
                         }
-                        $expectedAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
                         $reply = ''
                         $deadline = [DateTime]::UtcNow.AddSeconds(3)
                         while ([DateTime]::UtcNow -lt $deadline -and $reply -notmatch [Regex]::Escape($expectedAck)) {
@@ -243,6 +297,9 @@ try {
         }
         Write-Host ("{0:HH:mm:ss} PRO Wireless: {1}% connected={2} charging={3}" -f (Get-Date), $level, $connected, $charging)
         Write-Host ("{0:HH:mm:ss} HyperX Cloud III S: {1}% connected={2} charging={3}" -f (Get-Date), $headsetLevel, $headsetConnected, $headsetCharging)
+        Write-Host ("{0:HH:mm:ss} PC: cpu={1}% memory={2}% gpu={3}% gpuTemp={4}C netUp={5}KB/s netDown={6}KB/s diskFree={7}GB uptime={8}s" -f
+            (Get-Date), $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
+            $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb, $performance.UptimeSeconds)
         if (-not $Once) {
             for ($second = 0; $second -lt $IntervalSeconds; $second++) {
                 if (Test-Path -LiteralPath $stopFile) { break }

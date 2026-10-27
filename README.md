@@ -24,7 +24,7 @@
 | --- | --- | --- | --- |
 | HyperX Cloud III S Wireless | USB 2.4G 接收器 `03F0:02CC`，HID GET 查询 | 电量、充电状态、连接状态；异常时发送未知值 | `BAT2 device=0`；上一轮 `98%`、未充电 |
 | Logitech PRO Wireless | G HUB 本地 WebSocket，匹配 `deviceModel=pro_wireless_mouse` | 电量、连接状态；G HUB 没有充电字段时使用 `charging=-1` | `BAT2 device=1`；上一轮 `71%`、未充电 |
-| Waveshare ESP32-S3-Touch-LCD-2.8 | ST7789 240 × 320，目标 FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc` | 接收 `BAT1`/`BAT2`，USB 串口和 Wi-Fi HTTP，LVGL 页面显示 | 当前仅完成离线编译，尚未连接实机 |
+| Waveshare ESP32-S3-Touch-LCD-2.8 | ST7789 240 × 320，目标 FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc` | 接收 `BAT1`/`BAT2`/`PERF`，USB 串口和 Wi-Fi HTTP，触控滚动、锁屏和 PC MONITOR 页面 | 已完成离线编译，触控和页面仍待实机验证 |
 
 暂不支持：其他 HyperX 型号、其他 Logitech 鼠标、直接从 ESP32 BLE 电池服务读取，以及未经适配的第三方接收器。当前方案依赖 Windows 访问专用接收器或 G HUB；电脑关机后不得继续把旧数值标成实时电量。
 
@@ -34,7 +34,7 @@
 
 | 证据 | 已覆盖 | 不能替代 |
 | --- | --- | --- |
-| `Run-OfflineChecks.ps1` | 七个 PowerShell 脚本解析、字体 glyph 覆盖、参数拒绝、token 请求头、两条 `BAT2` 帧、首条 HTTP 500 后继续发送、transcript 不泄露 token、PID/停止文件清理 | ESP32 串口 ACK、屏幕显示、真实 Wi-Fi 和设备电量 |
+| `Run-OfflineChecks.ps1` | 七个 PowerShell 脚本解析、字体 glyph 覆盖、参数拒绝、token 请求头、两条 `BAT2` 帧和一条 `PERF` 帧、首条 HTTP 500 后继续发送、transcript 不泄露 token、PID/停止文件清理 | ESP32 串口 ACK、触控、屏幕显示、真实 Wi-Fi 和设备电量 |
 | `Run-OfflineChecks.ps1 -BuildFirmware` | 目标 FQBN 的 `WarningsAll` 固件编译和程序/RAM 体积 | 烧录、启动、触控、实物布局和长时间运行 |
 | `arduino-cli board list` | 当前 Windows 串口枚举状态 | 不能把蓝牙虚拟串口当作 ESP32-S3 |
 
@@ -45,9 +45,9 @@
 2026-10-27 在本机运行 `windows/Run-OfflineChecks.ps1 -BuildFirmware`，结果如下：
 
 - 7 个 PowerShell 脚本解析通过；页面中文字符 33 个，字体缺字 0。
-- 参数拒绝测试 7 个用例通过，`BAT2` ACK 文本派生 2 条通过。
-- HTTP smoke test 验证了带 token、不带 token，以及首条请求返回 HTTP 500 后继续发送第二条；PID、停止文件和临时日志均完成清理。
-- Arduino CLI 固件构建通过：程序 `1,186,968` 字节（90%），全局变量 `114,764` 字节（35%）。
+- 参数拒绝测试 7 个用例通过，`BAT2` 和 `PERF` ACK 文本派生 3 条通过。
+- HTTP smoke test 验证了带 token、不带 token、两条 BAT2 帧加一条 PERF 帧，以及首条请求返回 HTTP 500 后继续发送后续帧；PID、停止文件和临时日志均完成清理。
+- Arduino CLI 固件构建通过：程序 `1,232,536` 字节（94%），全局变量 `116,316` 字节（35%）。
 - 本机未启动 G HUB，采集桥按预期产生 `connected=0`、`charging=-1` 的未知帧；未发现 ESP32-S3 串口，因此没有执行真实串口 ACK、烧录、屏幕、Wi-Fi 或长时间运行测试。
 
 待优化点按优先级排列：
@@ -56,7 +56,7 @@
 2. 增加 HID 和 G HUB 的固定测试夹具，覆盖真实电量、充电中、充满、设备离线和充电字段缺失等成功路径；目前离线 smoke test 主要覆盖未知帧和传输错误。
 3. 增加目标屏幕截图或像素级回归检查，自动发现中文缺字、长型号溢出、`100%` 重叠和状态刷新跳动。
 4. 做至少 2 小时的 USB/Wi-Fi 连续运行和断开重连测试，记录堆内存、请求超时、数据年龄和串口占用，确认不会逐轮增长。
-5. 根据实物硬件版本补齐 V1/V2 触控驱动和亮度/熄屏交互，目前亮度可通过串口设置，触控仍未启用。
+5. 根据实物硬件版本完成 V1/V2 触控实测和亮度/熄屏交互，目前触控代码已接入但仍未做实机验收。
 
 ## 架构与边界
 
@@ -74,7 +74,7 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 | --- | --- |
 | 板卡 | Waveshare ESP32-S3-Touch-LCD-2.8，16 MB Flash、8 MB PSRAM |
 | 屏幕 | ST7789，240 × 320，纵向 |
-| 触控 | V1 为 CST328；V2 为 CST3530；必须按背面标签选择版本；当前固件未启用触控 |
+| 触控 | V1 为 CST328；V2 为 CST3530；按背面标签自动探测；当前固件已接入统一 LVGL 指针输入 |
 | Arduino IDE | `E:\ArduinoIDE\Arduino IDE\Arduino IDE.exe` |
 | Arduino CLI | IDE 安装目录下 `resources\app\lib\backend\resources\arduino-cli.exe` |
 | 已验证板卡包 | Espressif ESP32 `3.3.10-cn` |
@@ -90,8 +90,8 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 
 | 硬件版本 | 显示控制器 | 触控控制器 | 版本确认方式 | 当前代码状态 |
 | --- | --- | --- | --- | --- |
-| V1 | ST7789 | CST328 | 产品背面标签 | 显示可用，触控未启用 |
-| V2 | ST7789 | CST3530 | 产品背面标签 | 显示可用，触控未启用 |
+| V1 | ST7789 | CST328 | 产品背面标签 | 显示和触控驱动已接入，实机待验证 |
+| V2 | ST7789 | CST3530 | 产品背面标签 | 显示和触控驱动已接入，实机待验证 |
 
 兼容边界和接入规则：
 
@@ -99,7 +99,7 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 - `Display_ST7789.cpp`、LVGL 页面和电量传输代码与触控型号无关，V1/V2 可以共用显示部分。
 - CST328 与 CST3530 的初始化寄存器、坐标报告和中断行为不能假设相同。错误地使用另一版本驱动，可能表现为无触控、坐标错乱或初始化失败。
 - 后续代码应将 `CST328`、`CST3530` 做成两个独立驱动，由一个明确的硬件版本配置只选择其中一个，再通过统一的 `lv_indev_drv_t` 接口接入 LVGL；不能同时注册两个触控驱动，也不能运行时盲猜型号。
-- 当前分支没有触控初始化、I2C 读取或 LVGL 输入设备注册，因此不会声称已经兼容 V1 或 V2；此状态下只验证显示页面、电量数据和网络传输。
+- 当前分支已加入官方 CST328/CST3530 的启动探测、I2C 读取和 LVGL 指针输入注册，并在没有触控芯片时降级为无触控显示；但本机没有 ESP32-S3 实机，不能把离线编译当作触控验收。
 
 当前构建基线为 Arduino ESP32 core `3.3.10-cn`、LVGL `8.3.10`、FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc`。V2 触控适配需要以官方 CST3530 示例使用的驱动接口和库版本为准，接入后必须重新编译，并在实物上验证触控坐标、显示方向、滑动和复位稳定性。
 
@@ -113,13 +113,14 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 | --- | --- |
 | `ESP32-S3-Touch-LCD-2.8-Battery-Display.ino` | 初始化、主循环 |
 | `BatteryDashboard.cpp/.h` | LVGL 页面、设备行、状态更新 |
+| `Touch_Driver.cpp/.h` | 官方 CST328/CST3530 自动探测、I2C 触点读取和 LVGL 指针输入 |
 | `battery_font_16.c`、`fonts/NotoSansSC-LICENSE.txt` | 页面中文/ASCII 子集字体及其 OFL-1.1 许可 |
-| `BatteryTransport.cpp/.h` | USB/HTTP 数据帧校验、Wi-Fi 重连/mDNS、每设备过期处理 |
+| `BatteryTransport.cpp/.h` | USB/HTTP 数据帧校验、`BAT1`/`BAT2`/`PERF` 解析、Wi-Fi 重连/mDNS、每设备过期处理 |
 | `Display_ST7789.cpp/.h` | 官方屏幕引脚与初始化 |
 | `LVGL_Driver.cpp/.h`、`lv_conf.h` | 显示缓冲、时钟、字体配置 |
 | `windows/BatteryBridge.ps1` | 周期采集两台设备并发送数据 |
 | `windows/Build-Firmware.ps1` | 自动发现 Arduino CLI，在唯一临时草图目录编译固件 |
-| `windows/Test-BatteryBridge.ps1` | 本机 HTTP smoke test，验证两条 BAT2 帧和可选 token 请求头；`-ValidationOnly` 验证参数拒绝 |
+| `windows/Test-BatteryBridge.ps1` | 本机 HTTP smoke test，验证两条 BAT2 帧、一条 PERF 帧和可选 token 请求头；`-ValidationOnly` 验证参数拒绝 |
 | `windows/Test-FirmwareAssets.ps1` | 自动核对页面中文字符与 LVGL 子集字体 glyph 覆盖 |
 | `windows/Run-OfflineChecks.ps1` | 一键运行 PowerShell 解析、字体覆盖、桥接器验证、HTTP smoke test 和退出清理检查；加 `-BuildFirmware` 才执行固件构建 |
 | `windows/Set-PanelToken.ps1` | 从进程环境变量读取 token 并通过 USB 配置面板 |
@@ -140,7 +141,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [HaloBattery Cloud III S 实现与说明](https://github.com/HeyOkay/HaloBattery/blob/main/providers/hyperx_cloud3s.py)
 - [Cloud III S Windows Output Report 适配记录](https://github.com/HeyOkay/HaloBattery/pull/123)
 
-双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。
+双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。电脑性能帧为 `PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec`；GPU 或温度不可用时使用 `-1`。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -162,7 +163,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [x] 已从工作区外目录调用 `D:\0-caoshi\0-other\ESP32-S3\windows\Run-OfflineChecks.ps1`，路径解析和完整离线回归均通过。
 - [x] 已检查分支、未提交修改、Arduino 板卡包和 LVGL 版本：`master`、ESP32 core `3.3.10`、LVGL `8.3.10`；现有改动已保留。
 - [ ] 重新编译并确认双设备数据可被 ESP32 接收，记录当时的真实百分比与 ACK。
-- [ ] 对照实物确认页面确实展示正确数据，不只检查串口。
+- [ ] 对照实物确认页面、滑动、锁屏和性能页确实工作，不只检查串口。
 
 验收：工程能在本机重新构建，耳机与鼠标分别更新，失败时显示未知；不出现固定演示电量。
 
@@ -171,7 +172,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [x] 整理实际会显示的中文字符，生成只含目标中文字形及 ASCII 的 LVGL 8 子集字体，避免引入完整中文字库；自动提取 `BatteryDashboard.cpp` 的 33 个中文字符并与字体 glyph 注释核对，缺字数为 0。
 - [x] 准备 16px 中文正文/标题字体，保留拉丁字母、数字、百分号和设备型号字符。
 - [x] 注册 Noto Sans SC 子集字体并应用到标题、状态、来源和更新时间标签；拉丁设备型号继续使用 Montserrat，并保留 OFL-1.1 许可。字体由 `lv_font_conv 1.5.3` 从 `@fontsource/noto-sans-sc 5.3.1` 生成。
-- [x] 已用 Arduino CLI 编译检查固件体积：程序 1,186,968 字节，占默认应用分区 90%；全局变量 114,764 字节，占动态内存 35%。当前字体源文件为 75 KB，LVGL 完整内置 SimSun 文件约 1.09 MB。
+- [x] 已用 Arduino CLI 编译检查固件体积：程序 1,232,536 字节，占默认应用分区 94%；全局变量 116,316 字节，占动态内存 35%。当前字体源文件为 75 KB，LVGL 完整内置 SimSun 文件约 1.09 MB。
 
 验收：所有目标中文、英文型号和 `0% / 100% / --` 均正常显示；固件仍可编译、烧录，无缺字。
 
@@ -206,7 +207,8 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 
 ### 第 5 步：交互与屏幕设置
 
-- [ ] 先核对产品背面 V1/V2 标签；V2 使用 CST3530 官方驱动，V1 使用 CST328 官方驱动，不能交叉使用。
+- [x] 接入官方 CST328/CST3530 自动探测和 LVGL 指针输入；内容区支持上下滑动，加入 `MONITOR`、`LOCK`、`BACK` 触控操作，性能页显示 CPU、内存、GPU、GPU 温度、网络、磁盘和运行时间。
+- [ ] 实机核对产品背面 V1/V2 标签，确认触控坐标方向、滑动惯性、锁屏解锁和按钮点击；V2 使用 CST3530，V1 使用 CST328，不能交叉使用。
 - [x] 增加串口亮度设置 `BRIGHTNESS 0-100` / 查询 `BRIGHTNESS?`，设置写入 ESP32 NVS，开机恢复；输入 `HELP` 或 `?` 可查看 Wi-Fi、token、亮度、版本、健康状态和数据帧命令，`VERSION?` 返回当前协议版本；熄屏/唤醒仍待触控版本确认。
 - [x] 当前未增加手动刷新，不引入额外阻塞操作；如后续加入，必须显示刷新中/完成/失败反馈，且不得在 LVGL 线程执行阻塞 USB 或网络查询。
 - [x] 在硬件版本和驱动未验证前，显示页面和数据传输可独立运行；触控驱动与坐标验收仍待实机。
@@ -228,15 +230,15 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 ### 第 7 步：采集程序与稳定性
 
 - [x] 增加可见的启动/停止入口，通过互斥量避免重复实例抢占串口，使用 PID 文件等待退出；`-Stop` 在当前轮询结束后请求桥接实例退出。
-- [x] 处理串口重新枚举、USB 拔插、G HUB 未启动、耳机关闭和 HID 超时；发送失败后进入下一轮重连；USB 模式可用 `-RequireAck` 逐帧等待匹配的 `ACK BAT2`，超时即按发送失败处理。本机已验证 ACK 文本派生和失败清理，真实板端 ACK 仍待实机。
+- [x] 处理串口重新枚举、USB 拔插、G HUB 未启动、耳机关闭和 HID 超时；发送失败后进入下一轮重连；USB 模式可用 `-RequireAck` 逐帧等待匹配的 `ACK BAT2` 或 `ACK PERF`，超时即按发送失败处理。本机已验证 ACK 文本派生和失败清理，真实板端 ACK 仍待实机。
 - [x] 每次轮询后释放 HID 句柄，设备异常不影响另一设备更新。
 - [x] G HUB 未返回鼠标充电字段或设备不可用时发送 `charging=-1`，不将未知状态伪报为未充电。
 - [x] 限制采集间隔为 1–3600 秒，拒绝 0 或负值间隔以避免无延迟轮询。
 - [x] 启动时校验 `-PanelUrl` 必须是无用户信息、无 query/fragment 的绝对 HTTP/HTTPS 面板基址，避免错误地址、URL 凭据或 token 进入循环和 transcript。
 - [x] 已在本机直接验证间隔越界、非 HTTP(S)/非绝对 URL、带 query/fragment/userinfo 的 URL 和无效 Arduino CLI 路径都会立即拒绝，不启动采集循环或临时构建。
-- [x] `Test-BatteryBridge.ps1 -ValidationOnly` 将间隔上下界、协议、query、fragment、userinfo 和 Wi-Fi 模式误用 `-RequireAck` 拒绝场景固化为七个可重复用例，并核对两个 `BAT2` 帧到 ACK 文本的派生结果。
+- [x] `Test-BatteryBridge.ps1 -ValidationOnly` 将间隔上下界、协议、query、fragment、userinfo 和 Wi-Fi 模式误用 `-RequireAck` 拒绝场景固化为七个可重复用例，并核对两个 `BAT2` 帧和一个 `PERF` 帧到 ACK 文本的派生结果。
 - [x] 已用本机 HTTP 模拟接收端运行 `BatteryBridge.ps1 -PanelUrl ... -Once`，G HUB 不可用时收到两条 `BAT2,1,-1,0,-1` / `BAT2,0,-1,0,-1` 未知帧；验证 token 请求头会随两条帧发送，第一条返回 HTTP 500 时第二条仍正常发送，`-Once` 会以失败状态退出；支持 `-LogPath` 追加 PowerShell transcript 以保留采集日志。这些都不是实机验收。
-- [x] 提供 `Test-BatteryBridge.ps1` 本机 HTTP smoke test，可重复验证两条未知帧的顺序、可选 token 请求头、transcript 不泄露 token，以及第一条 HTTP 500 时仍发送第二条且 `-Once` 返回失败；不依赖 G HUB、ESP32 或外部网络。这不是实机验收。
+- [x] 提供 `Test-BatteryBridge.ps1` 本机 HTTP smoke test，可重复验证两条未知 BAT2 帧和一条 PERF 帧的顺序、可选 token 请求头、transcript 不泄露 token，以及第一条 HTTP 500 时仍发送后续帧且 `-Once` 返回失败；不依赖 G HUB、ESP32 或外部网络。这不是实机验收。
 - [x] 连续三轮带 token 的本机 smoke test 均通过，退出后 PID 文件和停止标记均清理；这只证明本地重复启动路径，不替代 2 小时实机稳定性测试。
 - [x] 额外用不存在的串口运行 `-Once`，确认失败后 PID 文件和停止标记均清理；串口重新枚举、拔插和实际 ACK 仍待实机。
 - [x] 用不存在的串口运行 `-RequireAck -Once`，确认严格 ACK 模式同样失败并清理 PID/停止文件；ACK 等待时序仍待实机。
@@ -284,7 +286,7 @@ Get-ChildItem -LiteralPath $repo -File | Where-Object Extension -in '.ino','.c',
 & $cli @configArgs upload --port COM12 --fqbn 'esp32:esp32:esp32s3:CDCOnBoot=cdc' $project
 ```
 
-本机已在临时目录验证 Arduino CLI `1.5.2-rc.1`、ESP32 core `3.3.10` 和 LVGL `8.3.10`；按上述临时草图命令编译通过，输出为程序 1,186,968 字节（90%）和全局变量 114,764 字节（35%）。`--warnings all` 复编译也通过；警告位于 LVGL 8.3.10 的枚举位运算和 const 限定处理，本项目源码无编译警告。尚未连接板卡，因此没有执行上传或屏幕实物验收。确认硬件端口后，关闭占用串口的进程再执行上传；编译完成后可按需单独运行以下采集命令：
+本机已在临时目录验证 Arduino CLI `1.5.2-rc.1`、ESP32 core `3.3.10` 和 LVGL `8.3.10`；按上述临时草图命令编译通过，输出为程序 1,232,536 字节（94%）和全局变量 116,316 字节（35%）。`--warnings all` 复编译也通过；警告位于 LVGL 8.3.10 的枚举位运算和 const 限定处理，本项目源码无编译警告。尚未连接板卡，因此没有执行上传、触控、屏幕或 Wi-Fi 实物验收。确认硬件端口后，关闭占用串口的进程再执行上传；编译完成后可按需单独运行以下采集命令：
 
 也可直接使用仓库内脚本构建；默认会删除临时草图目录，调试构建文件时加 `-KeepStaging`：
 
@@ -310,7 +312,7 @@ $repo = 'D:\0-caoshi\0-other\ESP32-S3'
 & "$repo\windows\BatteryBridge.ps1"
 ```
 
-接入 ESP32 并需要严格确认每帧已被板端接收时，可在 USB 模式使用 `-RequireAck`；Wi-Fi 模式不支持该参数：
+接入 ESP32 并需要严格确认每帧已被板端接收时，可在 USB 模式使用 `-RequireAck`；电量帧等待 `ACK BAT2 <device> <level>`，性能帧等待 `ACK PERF <cpu> <memory> <gpu> <gpuTemp>`；Wi-Fi 模式不支持该参数：
 
 ```powershell
 & "$repo\windows\BatteryBridge.ps1" -RequireAck

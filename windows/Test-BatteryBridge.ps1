@@ -61,13 +61,17 @@ if ($ValidationOnly) {
     }
     $ackCases = @(
         [PSCustomObject]@{ Frame = 'BAT2,1,71,1,0'; Ack = 'ACK BAT2 1 71' },
-        [PSCustomObject]@{ Frame = 'BAT2,0,-1,0,-1'; Ack = 'ACK BAT2 0 -1' }
+        [PSCustomObject]@{ Frame = 'BAT2,0,-1,0,-1'; Ack = 'ACK BAT2 0 -1' },
+        [PSCustomObject]@{ Frame = 'PERF,42,68,77,65,12,345,128,86400'; Ack = 'ACK PERF 42 68 77 65' }
     )
     foreach ($ackCase in $ackCases) {
-        if ($ackCase.Frame -notmatch '^BAT2,(\d+),(-?\d+),') {
+        if ($ackCase.Frame -match '^BAT2,(\d+),(-?\d+),') {
+            $actualAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
+        } elseif ($ackCase.Frame -match '^PERF,(-?\d+),(-?\d+),(-?\d+),(-?\d+),') {
+            $actualAck = "ACK PERF $($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])"
+        } else {
             throw ("Unable to parse ACK test frame: {0}" -f $ackCase.Frame)
         }
-        $actualAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
         if ($actualAck -ne $ackCase.Ack) {
             throw ("Unexpected ACK derivation: {0}" -f $actualAck)
         }
@@ -94,7 +98,7 @@ try {
         $frames = @()
         try {
             $listener.Start()
-            for ($index = 0; $index -lt 2; $index++) {
+            for ($index = 0; $index -lt 3; $index++) {
                 $client = $listener.AcceptTcpClient()
                 try {
                     $stream = $client.GetStream()
@@ -166,10 +170,10 @@ try {
 
     $completed = Wait-Job $receiver -Timeout 10
     if (-not $completed -or $receiver.State -ne 'Completed') {
-        throw 'HTTP receiver did not receive two battery frames.'
+        throw 'HTTP receiver did not receive two battery frames and one performance frame.'
     }
     $frames = @(Receive-Job $receiver)
-    if ($frames.Count -ne 2) { throw ("Expected two battery frames, received {0}." -f $frames.Count) }
+    if ($frames.Count -ne 3) { throw ("Expected two battery frames and one performance frame, received {0}." -f $frames.Count) }
     $expectedBodies = @('BAT2,1,-1,0,-1', 'BAT2,0,-1,0,-1')
     for ($index = 0; $index -lt $expectedBodies.Count; $index++) {
         if ($frames[$index].Body -ne $expectedBodies[$index]) {
@@ -180,10 +184,16 @@ try {
             throw ("Unexpected token header on frame {0}." -f $index)
         }
     }
+    if ($frames[2].Body -notmatch '^PERF,-?\d+,-?\d+,-?\d+,-?\d+,\d+,\d+,\d+,\d+$') {
+        throw ("Unexpected performance frame: {0}" -f $frames[2].Body)
+    }
+    if ($frames[2].Token -ne $(if ($WithToken) { $token } else { '' })) {
+        throw 'Unexpected token header on performance frame.'
+    }
     if (-not (Test-Path -LiteralPath $log)) { throw 'BatteryBridge did not create the transcript log.' }
     $logText = Get-Content -LiteralPath $log -Raw
     if ($logText.Contains($token)) { throw 'BatteryBridge transcript leaked the token.' }
-    Write-Host ("BatteryBridge HTTP smoke test passed ({0} frames, token={1}, firstResponseError={2})." -f $frames.Count, $WithToken.IsPresent, $FirstResponseError.IsPresent)
+    Write-Host ("BatteryBridge HTTP smoke test passed ({0} frames including PERF, token={1}, firstResponseError={2})." -f $frames.Count, $WithToken.IsPresent, $FirstResponseError.IsPresent)
 } finally {
     [Environment]::SetEnvironmentVariable('BATTERY_PANEL_TOKEN', $previousToken, 'Process')
     if ($receiver) {

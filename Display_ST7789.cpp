@@ -223,9 +223,10 @@ void Backlight_Init()
 
 void Set_Backlight(uint8_t Light)                     
 {
-  if(Light > Backlight_MAX || Light < 0)
+  if(Light > Backlight_MAX)
     printf("Set Backlight parameters in the range of 0 to 100 \r\n");
   else{
+    LCD_Backlight = Light;
     uint32_t Backlight = Light*10;
     if(Backlight == 1000)
       Backlight = 1024;

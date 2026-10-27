@@ -10,11 +10,12 @@ void setup(void) {
   Lvgl_Init();
   BatteryDashboard_Create();
   BatteryTransport_Init();
-  Serial.println("Battery panel ready; waiting for Windows BAT1 frames.");
+  Serial.println("Battery panel ready; waiting for Windows BAT2 device frames.");
 }
 
 void loop(void) {
   Lvgl_Loop();
   BatteryTransport_Loop();
+  BatteryDashboard_Loop();
   delay(5);
 }

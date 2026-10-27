@@ -42,6 +42,16 @@ if ($ValidationOnly) {
             Parameters = @{ PanelUrl = 'http://127.0.0.1/panel'; RequireAck = $true; Once = $true }
             Description = '-PanelUrl http://127.0.0.1/panel -RequireAck -Once'
             Pattern = 'RequireAck is only supported'
+        },
+        [PSCustomObject]@{
+            Parameters = @{ OfflineTestMode = $true; Once = $true; Port = 'COM12' }
+            Description = '-OfflineTestMode -Once without a loopback PanelUrl'
+            Pattern = 'OfflineTestMode requires'
+        },
+        [PSCustomObject]@{
+            Parameters = @{ OfflineTestMode = $true; Once = $true; PanelUrl = 'http://192.0.2.1' }
+            Description = '-OfflineTestMode with a non-loopback PanelUrl'
+            Pattern = 'OfflineTestMode requires'
         }
     )
     foreach ($case in $cases) {
@@ -155,7 +165,7 @@ try {
     Start-Sleep -Milliseconds 300
     $bridgeFailed = $false
     try {
-        & $bridge -PanelUrl ("http://127.0.0.1:{0}" -f $port) -Once -LogPath $log | Out-Null
+        & $bridge -PanelUrl ("http://127.0.0.1:{0}" -f $port) -Once -OfflineTestMode -LogPath $log | Out-Null
     } catch {
         $bridgeFailed = $true
         if ($_.Exception.Message -like '*already running*') { throw }

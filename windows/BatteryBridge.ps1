@@ -6,9 +6,14 @@ param(
     [switch]$Stop,
     [switch]$RequireAck,
     [switch]$OfflineTestMode,
-    [int]$IntervalSeconds = 15
+    [switch]$TraceOrientation,
+    [int]$IntervalSeconds = 2
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PanelProtocol.ps1')
+$script:panelLineBuffer = ''
+$script:refreshRequested = $false
+$lastRefreshSequence = $null
 
 $pidFile = Join-Path ([IO.Path]::GetTempPath()) 'battery-bridge-esp32-s3.pid'
 $stopFile = $pidFile + '.stop'
@@ -91,11 +96,13 @@ function Open-SerialPort {
     $port = $null
     try {
         $port = [IO.Ports.SerialPort]::new($Name, 115200, 'None', 8, 'One')
+        $port.Encoding = [Text.Encoding]::UTF8
         $port.DtrEnable = $true
         $port.WriteTimeout = 3000
         $port.ReadTimeout = 1000
         $port.NewLine = "`n"
         $port.Open()
+        $script:panelLineBuffer = ''
         Start-Sleep -Seconds 2
         Write-Host ("Serial connected: {0}" -f $Name)
         return $port
@@ -161,6 +168,15 @@ function Get-ComputerPerformance {
             ForEach-Object { [int][Math]::Round(($_.CurrentTemperature / 10) - 273.15) })
         if ($temperatures.Count) { $gpuTemperature = $temperatures[0] }
     } catch { }
+    if ($gpuTemperature -lt 0) {
+        try {
+            if (-not ('AmdGpuTemperature' -as [type])) {
+                Add-Type -Path (Join-Path $PSScriptRoot 'AmdGpuTemperature.cs')
+            }
+            $gpuTemperature = [AmdGpuTemperature]::ReadCelsius()
+            Write-Host ("GPU temperature source: " + [AmdGpuTemperature]::Diagnostic)
+        } catch { $gpuTemperature = -1 }
+    }
     try {
         $network = @(Get-Counter '\Network Interface(*)\Bytes Received/sec','\Network Interface(*)\Bytes Sent/sec' -ErrorAction Stop).CounterSamples
         $downloadKbps = [uint32][Math]::Max(0, [Math]::Round((($network | Where-Object Path -Match 'Bytes Received/sec' | Measure-Object CookedValue -Sum).Sum) / 1024))
@@ -177,7 +193,46 @@ function Get-ComputerPerformance {
     }
 }
 
+function Send-PanelFrame([string]$Frame) {
+    try {
+        if ($PanelUrl) {
+            $headers = @{}
+            if ($panelToken) { $headers['X-Battery-Token'] = $panelToken }
+            $request = @{
+                UseBasicParsing = $true; Uri = $PanelUrl.TrimEnd('/') + '/battery'
+                Method = 'Post'; ContentType = 'text/plain'; Body = $Frame; TimeoutSec = 5
+            }
+            if ($headers.Count) { $request.Headers = $headers }
+            $null = Invoke-WebRequest @request
+        } else {
+            $serial.WriteLine($Frame)
+            if ($RequireAck) {
+                $expectedAck = Get-PanelAck $Frame
+                $reply = ''
+                $deadline = [DateTime]::UtcNow.AddSeconds(3)
+                while ([DateTime]::UtcNow -lt $deadline -and -not (Test-PanelAck $reply $expectedAck)) {
+                    $lines = @(Read-PanelOutput $serial)
+                    $lines | Where-Object { $_ -match '^ORIENTATION ' } | ForEach-Object { Write-Host $_ }
+                    if ($lines.Count) { $reply += ($lines -join "`n") + "`n" }
+                    if (-not (Test-PanelAck $reply $expectedAck)) { Start-Sleep -Milliseconds 25 }
+                }
+                if (-not (Test-PanelAck $reply $expectedAck)) { throw "Timed out waiting for $expectedAck." }
+                Write-Host $expectedAck
+            }
+        }
+        Write-Host ("{0:HH:mm:ss.fff} SENT {1}" -f (Get-Date), $Frame)
+        return $true
+    } catch {
+        Write-Warning ("Battery frame send failed: " + $_.Exception.Message)
+        return $false
+    }
+}
+
 $serial = $null
+$performance = $null
+$lastPerformancePoll = [DateTime]::MinValue
+$hyperXPaths = @()
+$lastHidDiscovery = [DateTime]::MinValue
 $transcriptStarted = $false
 try {
     if ($LogPath) {
@@ -198,6 +253,11 @@ try {
             }
         }
 
+        $cycleStarted = [DateTime]::UtcNow
+        $sendFailed = $false
+        if ($TraceOrientation -and $serial -and $serial.IsOpen) {
+            try { $serial.WriteLine('ORIENTATION?') } catch { Write-Warning $_.Exception.Message }
+        }
         if ($OfflineTestMode) {
             $level = -1; $connected = 0; $charging = -1
             $headsetLevel = -1; $headsetConnected = 0; $headsetCharging = -1
@@ -214,23 +274,32 @@ try {
                 $null = $socket.ConnectAsync([Uri]'ws://127.0.0.1:9010', $cts.Token).GetAwaiter().GetResult()
                 $list = Invoke-GHubGet $socket '/devices/list'
                 $mouse = $list.deviceInfos | Where-Object deviceModel -eq 'pro_wireless_mouse' | Select-Object -First 1
+                Write-Host ("G HUB PRO Wireless state=" + $(if ($mouse) { $mouse.state } else { 'NOT_FOUND' }))
                 if ($mouse -and $mouse.state -eq 'ACTIVE') {
                     $connected = 1
                     $battery = Invoke-GHubGet $socket ("/battery/{0}/state" -f $mouse.id)
-                    if ($null -ne $battery.percentage -and -not $battery.isBatteryRemoved) {
-                        $value = [double]$battery.percentage
-                        if ($value -ge 0 -and $value -le 100) { $level = [int][Math]::Round($value) }
-                    }
-                    if ($null -ne $battery.charging) {
-                        $charging = [int][bool]$battery.charging
-                    }
+                    $reading = Convert-GHubBattery $battery $mouse.id
+                    $level = $reading.Level
+                    $charging = $reading.Charging
                 }
-            } catch { Write-Warning ("G HUB unavailable: " + $_.Exception.Message) }
+            } catch {
+                $level = -1; $connected = 0; $charging = -1
+                Write-Warning ("G HUB unavailable: " + $_.Exception.Message)
+            }
             finally { $socket.Dispose(); $cts.Dispose() }
+            # A slow headset query or PC counter must not hold up an online mouse.
+            if (-not (Send-PanelFrame "BAT2,1,$level,$connected,$charging")) { $sendFailed = $true }
 
             $headsetLevel = -1; $headsetConnected = 0; $headsetCharging = -1
             try {
-                $headset = & (Join-Path $PSScriptRoot 'Read-HyperX.ps1')
+                if (([DateTime]::UtcNow - $lastHidDiscovery).TotalSeconds -ge 30) {
+                    $hyperXPaths = @(Get-PnpDevice -PresentOnly -Class HIDClass |
+                        Where-Object InstanceId -like 'HID\VID_03F0&PID_02CC*' |
+                        ForEach-Object { '\\?\' + $_.InstanceId.Replace('\','#') + '#{4d1e55b2-f16f-11cf-88cb-001111000030}' })
+                    $lastHidDiscovery = [DateTime]::UtcNow
+                }
+                $headset = & (Join-Path $PSScriptRoot 'Read-HyperX.ps1') -Paths $hyperXPaths
+                Write-Host ("HyperX raw query: " + $headset.Diagnostic)
                 if ($headset.Level -ge 0 -and $headset.Level -le 100) {
                     $headsetLevel = $headset.Level
                     $headsetConnected = 1
@@ -239,54 +308,21 @@ try {
                     $headsetCharging = [int]($headset.Charging -gt 0)
                 }
             } catch { Write-Warning ("HyperX unavailable: " + $_.Exception.Message) }
+            if (-not (Send-PanelFrame "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging")) { $sendFailed = $true }
 
-            $performance = Get-ComputerPerformance
+            if (-not $performance -or ([DateTime]::UtcNow - $lastPerformancePoll).TotalSeconds -ge 15) {
+                $performance = Get-ComputerPerformance
+                $lastPerformancePoll = [DateTime]::UtcNow
+            }
         }
         $performanceFrame = "PERF,{0},{1},{2},{3},{4},{5},{6},{7}" -f `
             $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
             $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb,
             $performance.UptimeSeconds
-        $sendFailed = $false
-        foreach ($frame in @("BAT2,1,$level,$connected,$charging", "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging", $performanceFrame)) {
-            try {
-                if ($PanelUrl) {
-                    $headers = @{}
-                    if ($panelToken) { $headers['X-Battery-Token'] = $panelToken }
-                    $request = @{
-                        UseBasicParsing = $true
-                        Uri = $PanelUrl.TrimEnd('/') + '/battery'
-                        Method = 'Post'
-                        ContentType = 'text/plain'
-                        Body = $frame
-                        TimeoutSec = 5
-                    }
-                    if ($headers.Count) { $request.Headers = $headers }
-                    $null = Invoke-WebRequest @request
-                } else {
-                    $serial.WriteLine($frame)
-                    if ($RequireAck) {
-                        if ($frame -match '^BAT2,(\d+),(-?\d+),') {
-                            $expectedAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
-                        } elseif ($frame -match '^PERF,(-?\d+),(-?\d+),(-?\d+),(-?\d+),') {
-                            $expectedAck = "ACK PERF $($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])"
-                        } else {
-                            throw 'Unable to derive expected ACK.'
-                        }
-                        $reply = ''
-                        $deadline = [DateTime]::UtcNow.AddSeconds(3)
-                        while ([DateTime]::UtcNow -lt $deadline -and $reply -notmatch [Regex]::Escape($expectedAck)) {
-                            $reply += $serial.ReadExisting()
-                            Start-Sleep -Milliseconds 100
-                        }
-                        if ($reply -notmatch [Regex]::Escape($expectedAck)) {
-                            throw "Timed out waiting for $expectedAck."
-                        }
-                    }
-                }
-            } catch {
-                $sendFailed = $true
-                Write-Warning ("Battery frame send failed: " + $_.Exception.Message)
-            }
+        $frames = @($performanceFrame)
+        if ($OfflineTestMode) { $frames = @("BAT2,1,$level,$connected,$charging", "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging", $performanceFrame) }
+        foreach ($frame in $frames) {
+            if (-not (Send-PanelFrame $frame)) { $sendFailed = $true }
         }
         if ($sendFailed -and $serial) {
             if ($serial.IsOpen) { $serial.Close() }
@@ -299,8 +335,8 @@ try {
         if ($serial -and -not $RequireAck) {
             try {
                 Start-Sleep -Milliseconds 300
-                $reply = $serial.ReadExisting()
-                if ($reply) { Write-Host $reply.Trim() }
+                $reply = @(Read-PanelOutput $serial)
+                if ($reply.Count) { Write-Host ($reply -join "`n") }
             } catch {
                 Write-Warning ("Serial read failed: " + $_.Exception.Message)
                 if ($serial.IsOpen) { $serial.Close() }
@@ -314,9 +350,34 @@ try {
             (Get-Date), $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
             $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb, $performance.UptimeSeconds)
         if (-not $Once) {
-            for ($second = 0; $second -lt $IntervalSeconds; $second++) {
+            # Interval is measured from query start; expensive counters no longer
+            # add a second full interval after each collection.
+            $nextPoll = $cycleStarted.AddSeconds($IntervalSeconds)
+            $nextHealth = [DateTime]::UtcNow
+            while ([DateTime]::UtcNow -lt $nextPoll) {
                 if (Test-Path -LiteralPath $stopFile) { break }
-                Start-Sleep -Seconds 1
+                if ($serial -and $serial.IsOpen) {
+                    try {
+                        $output = @(Read-PanelOutput $serial)
+                        if ($output.Count) { Write-Host ($output -join "`n") }
+                    } catch { break }
+                } elseif ($PanelUrl -and [DateTime]::UtcNow -ge $nextHealth) {
+                    $nextHealth = [DateTime]::UtcNow.AddSeconds(1)
+                    try {
+                        $health = Invoke-WebRequest -UseBasicParsing -Uri ($PanelUrl + '/health') -TimeoutSec 2
+                        if ($health.Content -match '(?m)^refresh=(\d+)\s*$') {
+                            $sequence = $Matches[1]
+                            if ($null -ne $lastRefreshSequence -and $lastRefreshSequence -ne $sequence) { $script:refreshRequested = $true }
+                            $lastRefreshSequence = $sequence
+                        }
+                    } catch { }
+                }
+                if ($script:refreshRequested) {
+                    $script:refreshRequested = $false
+                    Write-Host 'Panel requested immediate battery read.'
+                    break
+                }
+                Start-Sleep -Milliseconds 100
             }
         }
     } while (-not $Once -and -not (Test-Path -LiteralPath $stopFile))

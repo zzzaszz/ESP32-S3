@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $bridge = Join-Path $PSScriptRoot 'BatteryBridge.ps1'
+. (Join-Path $PSScriptRoot 'PanelProtocol.ps1')
 if ($ValidationOnly) {
     $cases = @(
         [PSCustomObject]@{
@@ -75,17 +76,43 @@ if ($ValidationOnly) {
         [PSCustomObject]@{ Frame = 'PERF,42,68,77,65,12,345,128,86400'; Ack = 'ACK PERF 42 68 77 65' }
     )
     foreach ($ackCase in $ackCases) {
-        if ($ackCase.Frame -match '^BAT2,(\d+),(-?\d+),') {
-            $actualAck = "ACK BAT2 $($Matches[1]) $($Matches[2])"
-        } elseif ($ackCase.Frame -match '^PERF,(-?\d+),(-?\d+),(-?\d+),(-?\d+),') {
-            $actualAck = "ACK PERF $($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])"
-        } else {
-            throw ("Unable to parse ACK test frame: {0}" -f $ackCase.Frame)
-        }
+        $actualAck = Get-PanelAck $ackCase.Frame
         if ($actualAck -ne $ackCase.Ack) {
             throw ("Unexpected ACK derivation: {0}" -f $actualAck)
         }
     }
+    if (Test-PanelAck "ACK BAT2 1 71`n" 'ACK BAT2 1 7') { throw 'ACK prefix incorrectly accepted.' }
+    if (Test-PanelAck "ACK PERF 1 2 3 45`n" 'ACK PERF 1 2 3 4') { throw 'PERF ACK prefix incorrectly accepted.' }
+    if (-not (Test-PanelAck "REQUEST BATTERY 1`nACK BAT2 1 7`n" 'ACK BAT2 1 7')) { throw 'Exact ACK was rejected.' }
+    $script:panelLineBuffer = ''; $script:refreshRequested = $false
+    $fakeSerial = [PSCustomObject]@{ Chunks = @('REQUEST BAT', "TERY 2`r`nACK BAT2 1 7`n"); Index = 0 }
+    $fakeSerial | Add-Member -MemberType ScriptMethod -Name ReadExisting -Value {
+        $value = $this.Chunks[$this.Index]; $this.Index++; return $value
+    }
+    if (@(Read-PanelOutput $fakeSerial).Count -or $script:refreshRequested) { throw 'Partial request processed too early.' }
+    $lines = @(Read-PanelOutput $fakeSerial)
+    if (-not $script:refreshRequested -or $lines.Count -ne 2 -or
+        -not (Test-PanelAck ($lines -join "`n") 'ACK BAT2 1 7')) { throw 'Fragmented refresh request or interleaved ACK lost.' }
+    foreach ($json in @('{"deviceId":"mouse"}', '{"deviceId":"mouse","percentage":null}',
+                         '{"deviceId":"mouse","percentage":true}', '{"deviceId":"mouse","percentage":101}')) {
+        if ((Convert-GHubBattery ($json | ConvertFrom-Json) 'mouse').Level -ne -1) { throw 'Invalid battery became a percentage.' }
+    }
+    $reading = Convert-GHubBattery ('{"deviceId":"mouse","percentage":0,"charging":false}' | ConvertFrom-Json) 'mouse'
+    if ($reading.Level -ne 0 -or $reading.Charging -ne 0) { throw 'Real zero or charging=false was lost.' }
+    $rejectedDevice = $false
+    try { $null = Convert-GHubBattery ('{"deviceId":"other","percentage":71}' | ConvertFrom-Json) 'mouse' }
+    catch { $rejectedDevice = $true }
+    if (-not $rejectedDevice) { throw 'Wrong device battery was accepted.' }
+    if (-not ('HyperXReader' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'HyperXReader.cs') }
+    $reply = [byte[]](12, 2, 3, 1, 0, 6, 98)
+    if ([HyperXReader]::ParseReply($reply, 7, 6) -ne 98) { throw 'HyperX valid battery reply rejected.' }
+    if ([HyperXReader]::ParseReply($reply, 6, 6) -ne -1) { throw 'HyperX truncated reply accepted.' }
+    if ([HyperXReader]::ParseReply($reply, 7, 72) -ne -1) { throw 'HyperX unrelated command accepted.' }
+    $reply[6] = 255
+    if ([HyperXReader]::ParseReply($reply, 7, 6) -ne -1) { throw 'HyperX 255 accepted as battery.' }
+    $reply[0] = 13; $reply[6] = 98
+    if ([HyperXReader]::ParseReply($reply, 7, 6) -ne -1) { throw 'HyperX stale notification accepted as GET reply.' }
+    Write-Host 'Battery accuracy regressions passed (exact ACK, missing/invalid fields, device identity, HID reply matching).'
     Write-Host ("BatteryBridge validation test passed ({0} cases, {1} ACK derivations)." -f $cases.Count, $ackCases.Count)
     return
 }

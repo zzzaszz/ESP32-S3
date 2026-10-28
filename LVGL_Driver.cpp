@@ -8,8 +8,18 @@
 static lv_disp_draw_buf_t drawBuffer;
 static lv_color_t drawBufferA[LVGL_BUF_LEN];
 static lv_color_t drawBufferB[LVGL_BUF_LEN];
+static uint16_t *capturePixels = nullptr;
 
 static void flushDisplay(lv_disp_drv_t *display, const lv_area_t *area, lv_color_t *pixels) {
+  if (capturePixels) {
+    const int width = area->x2 - area->x1 + 1;
+    for (int y = area->y1; y <= area->y2; ++y) {
+      if (y % 2) continue;
+      for (int x = area->x1; x <= area->x2; ++x) {
+        if (x % 2 == 0) capturePixels[(y / 2) * 160 + x / 2] = pixels[(y - area->y1) * width + x - area->x1].full;
+      }
+    }
+  }
   LCD_addWindow(area->x1, area->y1, area->x2, area->y2,
                 reinterpret_cast<uint16_t *>(&pixels->full));
   lv_disp_flush_ready(display);
@@ -48,4 +58,25 @@ void Lvgl_Init(void) {
 
 void Lvgl_Loop(void) {
   lv_timer_handler();
+}
+
+void Lvgl_PrintFrame(void) {
+  capturePixels = static_cast<uint16_t *>(calloc(160 * 120, sizeof(uint16_t)));
+  if (!capturePixels) { Serial.println("ERR FRAME CAPTURE MEMORY"); return; }
+  lv_obj_invalidate(lv_scr_act());
+  lv_refr_now(nullptr);
+  Serial.println("FRAME BEGIN 160 120");
+  const char hex[] = "0123456789ABCDEF";
+  char row[641];
+  row[640] = '\0';
+  for (unsigned y = 0; y < 120; ++y) {
+    for (unsigned x = 0; x < 160; ++x) {
+      const uint16_t value = capturePixels[y * 160 + x];
+      for (unsigned digit = 0; digit < 4; ++digit) row[x * 4 + digit] = hex[(value >> (12 - 4 * digit)) & 15];
+    }
+    Serial.println(row);
+  }
+  Serial.println("FRAME END");
+  free(capturePixels);
+  capturePixels = nullptr;
 }

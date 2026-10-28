@@ -11,3 +11,8 @@ void BatteryDashboard_UpdateDevice(int device, int level, bool connected, int ch
 void BatteryDashboard_UpdatePerformance(int cpu, int memory, int gpu, int gpuTemperature,
                                         uint32_t uploadKbps, uint32_t downloadKbps,
                                         uint32_t diskFreeGb, uint32_t uptimeSeconds);
+void BatteryDashboard_RefreshStarted(void);
+void BatteryDashboard_PrintDiagnostics(void);
+bool BatteryDashboard_Command(const char *command);
+void BatteryDashboard_PrepareRotation(void);
+void BatteryDashboard_FinishRotation(void);

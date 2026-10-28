@@ -1,10 +1,78 @@
 # 无线设备电量显示板
 
-基于 Waveshare ESP32-S3-Touch-LCD-2.8 的桌面电量显示项目，目标是在 240 × 320 彩屏上展示 HyperX 耳机和 Logitech 鼠标的实际电量、充电状态及数据更新时间。
+## 最新修正：第二页黑屏与滑动/翻转样式
+
+- 黑屏根因不是性能数据缺失：`battery_font_12.c` 之前是压缩字库（`bitmap_format=1`），而 `lv_conf.h` 关闭了解压（`LV_USE_FONT_COMPRESSED=0`），所以第二页全部标签有文本、有坐标，但实际像素为空。当前字库重新生成为非压缩格式（`bitmap_format=0`），并加入构建期兼容性检查，防止再次出现“有数据但不画字”。
+- 两页改为不透明卡片布局。监控页使用 2×4 卡片，CPU、内存、GPU 增加进度条；底部增加双色页码指示条，当前页更直观。
+- 左右横滑使用 180ms ease-out 位移动画，动画结束强制归位；连续滑动期间忽略重复触发，避免页面叠加、跳回或停在屏幕外。
+- 翻转前终止滑动并将页面归位，切换 LCD 方向后强制整屏刷新，再用 140ms 淡入恢复，减少黑帧和残影。显示方向与触控仍同步。
+- 新增实际绘制缓冲抓取和 PNG 转换。修复前第二页仅 29 种颜色、34 个亮像素；修复后为 59 种颜色、185 个亮像素，系统卡片和指标文字已真实输出。修复后的第一页为 94 种颜色、607 个亮像素。
+
+详细根因、画面回归和运行状态见 [黑屏与交互样式修复记录](docs/2026-10-28-render-style-fix.md)。
+
+## 最新修正：正反方向与系统信息页
+
+- AUTO 正反映射已依据当前板卡的实物反馈反向校准，显示和触控仍同步翻转。`ORIENTATION INVERT OFF` 表示使用已修正的板卡默认方向；`ON` 是在此基础上再反向。手动 NORMAL / REVERSED 不变。
+- 从电量页向左或向右滑都能进入 PC 监控，再次横滑返回。根屏幕和页面内容区均接入手势，事件处理后停止冒泡，避免一次滑动切换两次。
+- `UI?` 现在打印当前页、`monitorVisible`、性能数据年龄和八项渲染文字。`PAGE 1/2`、`SWIPE LEFT/RIGHT` 可诊断导航和显示逻辑；串口命令自测不替代实物触摸验收。
+- RX 6600 XT 温度从 AMD 驱动的只读 PMLog 接口获得，无需安装额外软件；无有效传感器时仍显示 `--`。页面温度明确是 **GPU 温度**，不冒充 CPU 温度。
+- 2026-10-28 23:17 实际链路得到 CPU 18%、内存 55%、GPU 10%、GPU 温度 57°C，板端 `page=1, monitorVisible=1, boundsErrors=0`，两台设备同时真实更新。该组为真实查询，之前 42/68/77/65 为显示测试夹具。
+
+详细修改和测试见 [正反映射与监控页测试记录](docs/2026-10-28-monitor-fix.md)。
+
+基于 Waveshare ESP32-S3-Touch-LCD-2.8 的桌面电量显示项目，在 320 × 240 横屏上展示 HyperX 耳机和 Logitech 鼠标的电量、充电状态及数据更新时间。
+
+## 自动识别与反转
+
+默认使用板载 QMI8658 加速度计和陀螺仪识别两个横屏方向，倒置后自动翻转 180°，触控坐标同步变化。倾斜支架或竖起时同时支持 X/Y 主导的重力方向，稳定约 0.7 秒后切换；平放时累计陀螺仪相对转角，转到约 150° 时翻转以跟随半圈转动。传感器每 20ms 读取，静止噪声、剧烈晃动、触摸和数据中断会过滤。仍采用 320×240 横屏，不切换成竖屏布局。
+
+平放的初始朝向以开机或最近一次竖起的方向为基准；六轴传感器没有磁力计，不能识别开机前的水平绝对朝向。水平转动时请避开触摸区持握；`ORIENTATION?` 的 `algorithm=accel+gyro` 可确认是支持平放转动的新版。
+
+串口命令（先停止采集桥并关闭其他串口占用）：
+
+```text
+ORIENTATION?                 查询模式、方向、传感器状态、加速度（mg）及角速度/累计角度
+ORIENTATION AUTO             自动识别（默认）
+ORIENTATION NORMAL           固定原横屏方向
+ORIENTATION REVERSED         固定反向横屏
+ORIENTATION INVERT ON        将自动识别结果反向，适配安装方向
+ORIENTATION INVERT OFF       取消自动方向反向修正
+ORIENTATION TEST             运行方向判定及触控坐标自测，不替换真实传感器输入
+```
+
+模式和反向修正保存到 NVS，重启恢复；自动切换本身不反复写 Flash。传感器读取失败时保持方向并定期重试，手动固定方向仍可用。`INVERT` 只影响 AUTO，固定 NORMAL/REVERSED 不受它影响。实际搬动板卡后的图像和手势方向需要实物确认；详见 [方向识别测试记录](docs/2026-10-28-orientation.md)。
+
+USB 连续采集可加 `-TraceOrientation` 同时记录方向、角速度和累计角度，不必再开串口监视器抢占 COM12。当前后台已开启该诊断；实际转动与画面朝向仍需实物验收。
+
+## 2026-10-28 横屏与主动读取
+
+- 固件版本 `BatteryPanel/2`；正文、标题和设备型号为 12px，电量为 16px。耳机、鼠标左右两列，PC 指标为两列四行。
+- 已移除 `LOCK`、`MONITOR`、`BACK` 按钮。左右横滑均在电量页与 PC 监控页之间切换；两页均可下滑主动读取。
+- 右上角仅保留 30 × 28px 刷新图标。点击后显示“正在读取电量”，两台设备回复后显示“已更新”；20 秒未收齐回复显示“采集程序未响应”。重复请求有 1.5 秒防抖。
+- 必须运行本仓库新版 Windows 采集桥，主动读取才会查询真实设备。USB 通过 `REQUEST BATTERY <序号>` 通知采集桥；Wi-Fi 采集桥每秒查询 `/health` 的 `refresh` 序号。均会提前结束周期等待，重新查询 HID / G HUB，不在 LVGL 线程执行阻塞查询。
+- 修复 ACK 前缀误匹配（7% 不再接受 71% 的回复），加强 G HUB 字段类型和设备 ID 校验，排除 HID 非当前 GET 通知。缺失字段维持未知，真实的 0% 保留；无效值、断开和过期显示 `--`。
+
+连续运行采集（先关闭 Arduino 串口监视器；`-Once` 不会持续响应主动读取）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\BatteryBridge.ps1 -Port COM12 -RequireAck -IntervalSeconds 2 -LogPath "$env:TEMP\battery-panel-live.log"
+# 另开终端停止，释放串口
+powershell -ExecutionPolicy Bypass -File .\windows\BatteryBridge.ps1 -Stop
+```
+
+Wi-Fi 连续采集使用 `-PanelUrl http://battery-panel.local` 替代 `-Port COM12 -RequireAck`，保留已有 token 配置。串口独占时不能同时打开串口监视器。关闭采集桥后可发送 `REFRESH` 验证请求输出，发送 `UI?` 查看布局边界及渲染值；它们不替代物理触控验收。
+
+详细步骤、测试证据及未完成事项见 [横屏与主动读取测试记录](docs/2026-10-28-landscape-refresh.md) 和 [后续姿态/采集验证](docs/2026-10-28-orientation.md)。20:37 实际收到耳机 GET 96%、鼠标 68%，两台均有板端 ACK；离线时仍显示未知。尚未与厂商界面同时对照验收精度，不以测试帧代替实际设备电量。
+
+### 鼠标读取速度与断续显示
+
+默认轮询已从 15 秒改为 2 秒，并从每轮开始计时。鼠标读到后立即发送，不再等待耳机及 PC 计数器；HID 路径枚举每 30 秒刷新，PC 指标每 15 秒采样。正常更新常见约 2 秒，首轮枚举、性能采样和超时会延长间隔。主动读取同样走提前查询路径。
+
+本轮曾实际读到鼠标 `ACTIVE`、62%/未充电，并收到板端 `ACK BAT2 1 62`；之后 G HUB 也曾报告 `NOT_CONNECTED`、`ABSENT`。显示 `--` 时先查日志中的 G HUB 状态，不能仅凭接收器已插入就认定电量可读。停止采集或串口被占用超过 45 秒也会导致板端隐藏过期数据；烧录结束后需要恢复连续采集，`-Once` 仅发送一轮。
 
 ## 当前状态
 
-项目仓库：[zzzaszz/ESP32-S3](https://github.com/zzzaszz/ESP32-S3)。当前本机仓库路径为 `D:\AgentForge\proj\ESP32-S3`，本轮基于提交 `303e18e` 验证。
+项目仓库：[zzzaszz/ESP32-S3](https://github.com/zzzaszz/ESP32-S3)。当前本机仓库路径为 `D:\AgentForge\proj\ESP32-S3`，本轮基于提交 `c60e923` 修改。以下 2026-10-27 记录保留为历史证据，当前界面和操作以上方新版本说明为准。
 
 仓库历史记录中此前已完成并验证（不代表本轮实机验收）：
 
@@ -14,7 +82,7 @@
 - 两台设备的数据通过 USB 串口发送给 ESP32，板端分别返回确认。
 - 双设备固件编译通过、烧录校验通过；各设备独立维护数据过期状态。
 
-本轮已将该固件刻录到当前连接的 ESP32-S3（`COM12`，VID/PID `303A:1001`），刻录后程序镜像哈希校验通过，板端返回协议和数据 ACK。串口功能、帧验证和数据过期均已实机验证；当前未能读取有效耳机/鼠标电量，屏幕文字、触控和 Wi-Fi 仍需目视/交互验收。
+本轮已将该固件刻录到当前连接的 ESP32-S3（`COM12`，VID/PID `303A:1001`），刻录后程序镜像哈希校验通过，板端返回协议和数据 ACK。串口功能、帧验证和数据过期均已实机验证；鼠标和耳机均已读到有效电量并获得板端 ACK。屏幕文字、触控和 Wi-Fi 仍需目视/交互验收。
 
 ### 当前支持设备
 
@@ -22,19 +90,19 @@
 
 | 设备 | 识别方式 | 当前支持内容 | 协议编号 / 已记录结果 |
 | --- | --- | --- | --- |
-| HyperX Cloud III S Wireless | USB 2.4G 接收器 `03F0:02CC`，HID GET 查询 | 电量、充电状态、连接状态；异常时发送未知值 | `BAT2 device=0`；上一轮 `98%`、未充电 |
-| Logitech PRO Wireless | G HUB 本地 WebSocket，匹配 `deviceModel=pro_wireless_mouse` | 电量、连接状态；G HUB 没有充电字段时使用 `charging=-1` | `BAT2 device=1`；上一轮 `71%`、未充电 |
-| Waveshare ESP32-S3-Touch-LCD-2.8 | ST7789 240 × 320，目标 FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc` | 接收 `BAT1`/`BAT2`/`PERF`，USB 串口和 Wi-Fi HTTP，触控滚动、锁屏和 PC MONITOR 页面 | 本轮已烧录；串口版本/健康/亮度命令和电量/性能/非法帧 ACK 已验证；屏幕和触控待实物目视操作 |
+| HyperX Cloud III S Wireless | USB 2.4G 接收器 `03F0:02CC`，HID GET 查询 | 电量、充电状态、连接状态；异常时发送未知值 | `BAT2 device=0`；20:37 GET 返回 96%/未充电，离线曾返回 255 |
+| Logitech PRO Wireless | G HUB 本地 WebSocket，匹配 `deviceModel=pro_wireless_mouse` | 电量、连接状态；G HUB 没有充电字段时使用 `charging=-1` | `BAT2 device=1`；在线实测 62%/未充电，也观察到 `NOT_CONNECTED` / `ABSENT` |
+| Waveshare ESP32-S3-Touch-LCD-2.8 | ST7789 原生 240 × 320，当前旋转为 320 × 240，目标 FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc` | 接收 `BAT1`/`BAT2`/`PERF`，USB 串口和 Wi-Fi HTTP，滑动切换电量/PC 监控页、主动读取 | 已烧录 `BatteryPanel/2`；板端布局边界为 0；触控方向、屏幕观感待实物操作 |
 
 暂不支持：其他 HyperX 型号、其他 Logitech 鼠标、直接从 ESP32 BLE 电池服务读取，以及未经适配的第三方接收器。当前方案依赖 Windows 访问专用接收器或 G HUB；电脑关机后不得继续把旧数值标成实时电量。
 
-表中数值是历史读数，不是此刻电量。本轮 Windows 侧 HID 查询返回耳机 `255`/未知；G HUB 未运行，鼠标也返回未知。Windows 桥如成功查询，会真实发送该状态；已在屏幕板端验证电量帧 ACK，但没有使用未知状态伪造设备读数。Wi-Fi 未配置，故未完成无线全链路验收。
+2026-10-28 两台设备在线时均已获得实际电量，耳机先前曾返回 `255`，鼠标也曾离线；显示按每次真实查询更新。71% / 98% 是此前合成协议测试值，不能作为真实电量证据。采集桥真实发送当前状态，不伪造百分比。Wi-Fi 未配置，故未完成无线全链路验收。
 
 ### 当前验收边界
 
 | 证据 | 已覆盖 | 不能替代 |
 | --- | --- | --- |
-| `Run-OfflineChecks.ps1` | 7 个 PowerShell 脚本解析、字体 glyph 覆盖、9 个参数拒绝、token 请求头、两条 `BAT2` 帧和一条 `PERF` 帧、首条 HTTP 500 后继续发送、transcript 不泄露 token、PID/停止文件清理 | 触控、屏幕显示、真实 Wi-Fi 和设备电量 |
+| `Run-OfflineChecks.ps1` | 11 个 PowerShell 脚本解析、字体 glyph 覆盖、电量解析/ACK 回归、9 个参数拒绝、token 请求头、两条 `BAT2` 帧和一条 `PERF` 帧、首条 HTTP 500 后继续发送、transcript 不泄露 token、PID/停止文件清理 | 触控、屏幕显示、真实 Wi-Fi 和设备电量 |
 | `Run-OfflineChecks.ps1 -BuildFirmware` | 目标 FQBN 的 `WarningsAll` 固件编译和程序/RAM 体积 | 触控、屏幕目视检查、真实 Wi-Fi 和长时间运行 |
 | `arduino-cli board list` 与设备管理器 | `COM12`，USB VID/PID `303A:1001`；esptool 确认 ESP32-S3，240 MHz，8 MB PSRAM | 不能替代屏幕目视、触控操作或 Wi-Fi 验收 |
 
@@ -55,8 +123,8 @@
 
 仍待完成的实物验收按优先级排列：
 
-1. 目视检查中文、电量条、颜色、裁切和更新时间；确认板背标签对应 V1 CST328 或 V2 CST3530，并实测滑动、锁屏解锁、返回按钮。
-2. 启动 G HUB、接通耳机接收器并确保鼠标在线，重跑 `BatteryBridge.ps1 -RequireAck`，将板端显示与 G HUB/NGENUITY/耳机报告的同时刻电量交叉核对。当前电脑未运行 G HUB，耳机 GET 返回 `255`，所以不能验收真实设备读数。
+1. 目视检查横屏中文、电量条、颜色、裁切和更新时间；确认板背标签，并实测左右滑切页、下滑读取、右上角刷新和触控方向。固件检测到 `CST3530 READY`，标签仍以实物为准。
+2. 保持 G HUB 运行、接通耳机接收器并确保鼠标在线，重跑 `BatteryBridge.ps1 -RequireAck`，将板端显示与 G HUB/NGENUITY/耳机报告的同时刻电量交叉核对。耳机 GET 返回 `255` 时只能标记未知。
 3. 配置可用的 2.4 GHz Wi-Fi 后测试 token、`/health`、mDNS、断网重连和 USB 数据线断开后的持续更新。当前没有网络凭据，板端报告 Wi-Fi disconnected。
 4. 进行至少 2 小时 USB/Wi-Fi 连续运行与断开重连测试，观察堆内存、请求超时、数据年龄和串口占用。
 5. 如能提供可用相机视角或实机操作记录，补充目标屏幕截图/像素级回归，自动发现中文缺字、长型号溢出、`100%` 重叠和状态刷新跳动。
@@ -76,7 +144,7 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 | 项目 | 配置 |
 | --- | --- |
 | 板卡 | Waveshare ESP32-S3-Touch-LCD-2.8，16 MB Flash、8 MB PSRAM |
-| 屏幕 | ST7789，240 × 320，纵向 |
+| 屏幕 | ST7789，原生 240 × 320，当前 320 × 240 横向 |
 | 触控 | V1 为 CST328；V2 为 CST3530；按背面标签自动探测；当前固件已接入统一 LVGL 指针输入 |
 | Arduino IDE | `E:\ArduinoIDE\Arduino IDE\Arduino IDE.exe` |
 | Arduino CLI | IDE 安装目录下 `resources\app\lib\backend\resources\arduino-cli.exe` |
@@ -117,7 +185,8 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 | `ESP32-S3-Touch-LCD-2.8-Battery-Display.ino` | 初始化、主循环 |
 | `BatteryDashboard.cpp/.h` | LVGL 页面、设备行、状态更新 |
 | `Touch_Driver.cpp/.h` | 官方 CST328/CST3530 自动探测、I2C 触点读取和 LVGL 指针输入 |
-| `battery_font_16.c`、`fonts/NotoSansSC-LICENSE.txt` | 页面中文/ASCII 子集字体及其 OFL-1.1 许可 |
+| `DisplayOrientation.cpp/.h`、`OrientationPolicy.h` | QMI8658 姿态读取、方向稳定判定、显示/触控同步翻转、模式持久化和板端自测 |
+| `battery_font_12.c`、`fonts/NotoSansSC-LICENSE.txt` | 当前 12px 中文/ASCII 子集字体及其 OFL-1.1 许可；旧 `battery_font_16.c` 保留但页面不再引用 |
 | `BatteryTransport.cpp/.h` | USB/HTTP 数据帧校验、`BAT1`/`BAT2`/`PERF` 解析、Wi-Fi 重连/mDNS、每设备过期处理 |
 | `Display_ST7789.cpp/.h` | 官方屏幕引脚与初始化 |
 | `LVGL_Driver.cpp/.h`、`lv_conf.h` | 显示缓冲、时钟、字体配置 |
@@ -125,6 +194,10 @@ Logitech USB 接收器 → Windows G HUB 接口 ┘
 | `windows/Build-Firmware.ps1` | 自动发现 Arduino CLI，在唯一临时草图目录编译固件 |
 | `windows/Test-BatteryBridge.ps1` | 本机 HTTP smoke test，验证两条 BAT2 帧、一条 PERF 帧和可选 token 请求头；`-ValidationOnly` 验证参数拒绝 |
 | `windows/Test-FirmwareAssets.ps1` | 自动核对页面中文字符与 LVGL 子集字体 glyph 覆盖 |
+| `windows/PanelProtocol.ps1` | USB 分包请求解析、精确 ACK、电量字段/设备身份校验 |
+| `windows/Test-PanelHardware.ps1` | 板端合成帧、渲染值、刷新防抖/完成/超时、独立过期回归；结束清除测试电量 |
+| `windows/Test-PanelRefresh.ps1` | 本地模拟面板、真实只读设备查询，验证连续采集被主动读取提前唤醒 |
+| `windows/Test-PanelOrientation.ps1` | 实机方向策略自测、固定方向/反向修正命令和真实传感器读取验证；结束恢复 AUTO、INVERT OFF |
 | `windows/Run-OfflineChecks.ps1` | 一键运行 PowerShell 解析、字体覆盖、桥接器验证、HTTP smoke test 和退出清理检查；加 `-BuildFirmware` 才执行固件构建 |
 | `windows/Set-PanelToken.ps1` | 从进程环境变量读取 token 并通过 USB 配置面板 |
 | `windows/Read-HyperX.ps1`、`HyperXReader.cs` | 匹配耳机 HID 接口、查询电量和充电状态 |
@@ -167,16 +240,16 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [x] 已检查分支、未提交修改、Arduino 板卡包和 LVGL 版本：`master`、ESP32 core `3.3.10`、LVGL `8.3.10`；现有改动已保留。
 - [x] 编译并烧录当前 ESP32-S3；板端实测接受两条 BAT2 帧和 PERF 帧，返回预期 ACK；非法帧返回 `ERR FRAME`。测试电量 71/98 为合成协议值，不是设备读数。
 - [x] 验证 Windows 桥 `-RequireAck -Once` 可与 COM12 建立串口并等待 ACK 正常结束；由于 G HUB 未运行且耳机查询返回 255，此轮真实电量帧是未知值。
-- [ ] 对照实物确认页面、滑动、锁屏和性能页确实工作，不只检查串口。
+- [ ] 对照实物确认横屏页面、滑动切页和主动读取，不只检查串口。
 
 验收：工程能在本机重新构建，耳机与鼠标分别更新，失败时显示未知；不出现固定演示电量。
 
 ### 第 2 步：建立中文字体
 
-- [x] 整理实际会显示的中文字符，生成只含目标中文字形及 ASCII 的 LVGL 8 子集字体，避免引入完整中文字库；自动提取 `BatteryDashboard.cpp` 的 33 个中文字符并与字体 glyph 注释核对，缺字数为 0。
-- [x] 准备 16px 中文正文/标题字体，保留拉丁字母、数字、百分号和设备型号字符。
-- [x] 注册 Noto Sans SC 子集字体并应用到标题、状态、来源和更新时间标签；拉丁设备型号继续使用 Montserrat，并保留 OFL-1.1 许可。字体由 `lv_font_conv 1.5.3` 从 `@fontsource/noto-sans-sc 5.3.1` 生成。
-- [x] 已用 Arduino CLI 编译检查固件体积：程序 1,232,536 字节，占默认应用分区 94%；全局变量 116,316 字节，占动态内存 35%。当前字体源文件为 75 KB，LVGL 完整内置 SimSun 文件约 1.09 MB。
+- [x] 自动提取 `BatteryDashboard.cpp` 中文字符并核对 glyph 覆盖；当前 49 个不同中文字符，缺字数为 0。
+- [x] 改用 12px 中文正文/标题字体；型号使用 Montserrat 12，百分比使用 Montserrat 16。
+- [x] 当前字体由 `lv_font_conv 1.5.3` 从本机 `C:\Windows\Fonts\NotoSansSC-VF.ttf` 生成，包含 ASCII 0x20–0x7E，保留 OFL-1.1 许可。中文文案变更后必须重新生成并运行字体覆盖检查。
+- [x] Arduino CLI `--warnings all` 构建通过；体积和最终烧录结果记录在本次测试文档。
 
 验收：所有目标中文、英文型号和 `0% / 100% / --` 均正常显示；固件仍可编译、烧录，无缺字。
 
@@ -184,37 +257,37 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 
 - [x] 标题改为“设备电量”，移除页面内开发说明和协议说明。
 - [x] 状态统一为“等待数据”“已连接”“充电中”“充电状态未知”“暂不可用”“数据已过期”。
-- [x] 名称用“HyperX Cloud III S”和“罗技 PRO Wireless”，长型号允许省略或另行安排，不能覆盖百分比。
+- [x] 保留产品型号“HyperX Cloud III S”和“PRO Wireless”，长型号允许省略；状态、标题、更新时间采用中文。
 - [x] 显示“最近更新”或数据年龄；只有收到真实数据后才标为实时。
 
 验收：正常、未知、未充电、充电、采集失败、过期六类状态文字完整，且不会把“未知”显示成“0%”。
 
-### 第 4 步：调整 240 × 320 纵向布局
+### 第 4 步：调整 320 × 240 横向布局
 
-建议先采用两行设备布局，不为尚未接入的设备占位：
+当前采用两个设备并排布局，不为尚未接入的设备占位：
 
 | 区域 | 建议位置/高度 | 内容 |
 | --- | --- | --- |
-| 标题栏 | y=0–43，44 px | 页面名称、顶部 Wi-Fi 连接状态 |
-| 耳机行 | y=52–147，96 px | 耳机图标、名称、百分比、电量条、状态 |
-| 鼠标行 | y=156–251，96 px | 鼠标图标、名称、百分比、电量条、状态 |
-| 底部状态区 | y=260–319，60 px | 更新时间、USB/Wi-Fi 连接状态 |
+| 标题栏 | y=2–29 | 页面名称、USB/Wi-Fi 状态、小刷新图标 |
+| 耳机列 | x=8，y=40，148 × 162px | 型号、类型、百分比、电量条、状态、年龄 |
+| 鼠标列 | x=164，y=40，148 × 162px | 型号、类型、百分比、电量条、状态、年龄 |
+| 底部状态区 | y=218 | 读取反馈和页码 |
 
-- [x] 页面左右边距按 12 px，设备行固定为 216 × 96 px，内部留白统一。
-- [x] 百分比区域固定为 40 px，预留 `100%`；名称和状态在独立区域内截断，禁止与百分比重叠。
-- [x] 使用现有 LVGL 音频符号显示耳机，并用 LVGL 基础对象绘制鼠标外框和滚轮，不引入额外位图资源。
-- [x] 电量条固定为 196 × 8 px，更新只改数值和颜色，不重复创建控件。
+- [x] ST7789 设置 MADCTL `0x60`，LVGL 和显示驱动同步改为 320 × 240；触控原始坐标映射为 `x=rawY, y=239-rawX`。
+- [x] 左右边距 8px，列间距 8px；名称、电量、状态各自固定区域，超长使用省略号。
+- [x] 去除大图标和大导航按钮，设备百分比使用 16px，其余主要文字 12px。
+- [x] 电量条固定为 142 × 6px，更新只改数值和颜色，不重复创建控件。
 - [x] 正常、低电量、充电使用不同颜色；未知和过期隐藏数值，同时使用文字区分状态。
-- [x] 已按生成字体的 advance 宽度测量名称、状态和更新时间：最长鼠标名称约 133.3px，名称区域设为 134px；最终越界和裁切仍需实机确认。
+- [x] 板端 `UI?` 实测控件边界 `boundsErrors=0`；最终像素、旋转方向和可读性仍需实物确认。
 
 验收：实机检查两设备名称、`100%`、长中文状态；无越界、重叠、裁字和更新跳动，30 分钟无明显闪烁。
 
 ### 第 5 步：交互与屏幕设置
 
-- [x] 接入官方 CST328/CST3530 自动探测和 LVGL 指针输入；内容区支持上下滑动，加入 `MONITOR`、`LOCK`、`BACK` 触控操作，性能页显示 CPU、内存、GPU、GPU 温度、网络、磁盘和运行时间。
-- [ ] 实机核对产品背面 V1/V2 标签，确认触控坐标方向、滑动惯性、锁屏解锁和按钮点击；V2 使用 CST3530，V1 使用 CST328，不能交叉使用。
+- [x] 保留 CST328/CST3530 自动探测和 LVGL 指针输入；移除 `MONITOR`、`LOCK`、`BACK`，改为左右滑切页；性能页显示 CPU、内存、GPU、GPU 温度、网络、磁盘和运行时间。
+- [ ] 实机核对产品背面标签，确认横屏触控坐标、左右切页、下滑读取和小刷新按钮；V2 使用 CST3530，V1 使用 CST328。
 - [x] 增加串口亮度设置 `BRIGHTNESS 0-100` / 查询 `BRIGHTNESS?`，设置写入 ESP32 NVS，开机恢复；输入 `HELP` 或 `?` 可查看 Wi-Fi、token、亮度、版本、健康状态和数据帧命令，`VERSION?` 返回当前协议版本；熄屏/唤醒仍待触控版本确认。
-- [x] 当前未增加手动刷新，不引入额外阻塞操作；如后续加入，必须显示刷新中/完成/失败反馈，且不得在 LVGL 线程执行阻塞 USB 或网络查询。
+- [x] 新增手动读取及读取中/更新/超时反馈，通过序号通知 Windows 提前查询，LVGL 线程不做阻塞 HID / G HUB 调用。
 - [x] 在硬件版本和驱动未验证前，显示页面和数据传输可独立运行；触控驱动与坐标验收仍待实机。
 
 验收：触控坐标与显示方向一致，亮度范围有效，操作不造成卡顿或复位。
@@ -290,7 +363,7 @@ Get-ChildItem -LiteralPath $repo -File | Where-Object Extension -in '.ino','.c',
 & $cli @configArgs upload --port COM12 --fqbn 'esp32:esp32:esp32s3:CDCOnBoot=cdc' $project
 ```
 
-本机通过 IDE 自带 Arduino CLI、ESP32 core `3.3.10-cn` 和 LVGL `8.3.10` 编译通过；当前程序 `1,232,440` 字节（94%），全局变量 `116,316` 字节（35%）。`--warnings all` 的警告来自 LVGL 8.3.10 上游。2026-10-27 固件已烧录至 COM12 并通过 esptool 哈希验证；尚未完成屏幕目视、触控或 Wi-Fi 实物验收。确认硬件端口后，关闭占用串口的进程再执行上传；编译完成后可按需单独运行以下采集命令：
+本机通过 IDE 自带 Arduino CLI、ESP32 core `3.3.10-cn` 和 LVGL `8.3.10` 编译通过；2026-10-28 加入正反校准和监控页修正的最终程序 `1,231,628` 字节（93%），全局变量 `116,404` 字节（35%）。`--warnings all` 的警告来自 LVGL 8.3.10 上游。最终固件已烧录至 COM12 并通过 esptool 哈希验证；监控页真实数据及可见性已板端验证，实物观感、手势和 Wi-Fi 仍需现场验收。确认硬件端口后，关闭占用串口的进程再执行上传；编译完成后可按需单独运行以下采集命令：
 
 也可直接使用仓库内脚本构建；默认会删除临时草图目录，调试构建文件时加 `-KeepStaging`：
 

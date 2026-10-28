@@ -1,4 +1,6 @@
 #include "Touch_Driver.h"
+#include "DisplayOrientation.h"
+#include "OrientationPolicy.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -27,6 +29,7 @@ static Point points[kMaxPoints];
 static uint8_t pointCount = 0;
 static lv_coord_t lastX = 0;
 static lv_coord_t lastY = 0;
+static bool pressed = false;
 
 static bool readRegister(uint8_t address, uint32_t reg, uint8_t regBytes,
                          uint8_t *data, size_t length) {
@@ -159,15 +162,23 @@ void TouchDriver_Read(lv_indev_drv_t *, lv_indev_data_t *data) {
   else if (controller == Controller::Cst3530) ok = readCst3530();
 
   if (ok && pointCount > 0) {
-    lastX = static_cast<lv_coord_t>(points[0].x > 239 ? 239 : points[0].x);
-    lastY = static_cast<lv_coord_t>(points[0].y > 319 ? 319 : points[0].y);
+    // Touch controllers report the physical portrait coordinates. The LCD is
+    // rotated 90 degrees by MADCTL for the landscape UI.
+    int x, y;
+    Orientation_MapTouch(points[0].x, points[0].y, DisplayOrientation_IsReversed(), x, y);
+    lastX = x;
+    lastY = y;
+    pressed = true;
     data->point.x = lastX;
     data->point.y = lastY;
     data->state = LV_INDEV_STATE_PR;
     pointCount = 0;
   } else {
+    pressed = false;
     data->point.x = lastX;
     data->point.y = lastY;
     data->state = LV_INDEV_STATE_REL;
   }
 }
+
+bool TouchDriver_IsPressed(void) { return pressed; }

@@ -1,6 +1,8 @@
 #include "BatteryTransport.h"
 #include "BatteryDashboard.h"
 #include "Display_ST7789.h"
+#include "DisplayOrientation.h"
+#include "LVGL_Driver.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -24,7 +26,9 @@ static Preferences preferences;
 static bool preferencesReady = false;
 static String panelToken;
 static bool tokenStorageInvalid = false;
-static const char *const kPanelVersion = "BatteryPanel/1";
+static const char *const kPanelVersion = "BatteryPanel/2";
+static uint32_t refreshSequence = 0;
+static uint32_t lastRefreshRequest = 0;
 static String httpFrame;
 static bool httpBodyTooLong = false;
 static bool httpContentLengthInvalid = false;
@@ -108,6 +112,13 @@ static String healthBody() {
   body += connected ? WiFi.localIP().toString() : "-";
   body += "\nmdns=";
   body += mdnsStarted ? "battery-panel.local" : "-";
+  body += "\nrefresh=";
+  body += static_cast<unsigned long>(refreshSequence);
+  body += "\nscreen=320x240";
+  body += "\nreversed=";
+  body += DisplayOrientation_IsReversed() ? "1" : "0";
+  body += "\norientationMode=";
+  body += static_cast<unsigned>(DisplayOrientation_Mode());
   const uint32_t now = millis();
   appendDeviceHealth(body, 0, now);
   appendDeviceHealth(body, 1, now);
@@ -127,6 +138,12 @@ static void printHelp() {
   Serial.println("HELP BRIGHTNESS 0-100 or BRIGHTNESS?");
   Serial.println("HELP HEALTH? or IP");
   Serial.println("HELP VERSION?");
+  Serial.println("HELP REFRESH");
+  Serial.println("HELP UI?");
+  Serial.println("HELP FRAME? (160x120 render capture)");
+  Serial.println("HELP PAGE 1|2 or SWIPE LEFT|RIGHT");
+  Serial.println("HELP ORIENTATION? or ORIENTATION AUTO|NORMAL|REVERSED|TEST");
+  Serial.println("HELP ORIENTATION INVERT ON|OFF");
   Serial.println("HELP BAT2,device,level,connected,charging");
   Serial.println("HELP BAT1,level,connected,charging");
   Serial.println("HELP PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec");
@@ -278,6 +295,16 @@ void BatteryTransport_Loop() {
         Serial.println(kPanelVersion);
       } else if (serialLine == "HEALTH?") {
         Serial.println(healthBody());
+      } else if (serialLine == "REFRESH") {
+        BatteryTransport_RequestRefresh();
+      } else if (serialLine == "UI?") {
+        BatteryDashboard_PrintDiagnostics();
+      } else if (serialLine == "FRAME?") {
+        Lvgl_PrintFrame();
+      } else if (BatteryDashboard_Command(serialLine.c_str())) {
+        // Page diagnostics exercise the same navigation path as gestures.
+      } else if (DisplayOrientation_Command(serialLine.c_str())) {
+        // Orientation commands validate and persist their own settings.
       } else if (serialLine.startsWith("TOKEN\t")) {
         const String candidate = serialLine.substring(6);
         if (candidate == "CLEAR") {
@@ -354,4 +381,13 @@ void BatteryTransport_Loop() {
       expired[device] = true;
     }
   }
+}
+
+void BatteryTransport_RequestRefresh() {
+  const uint32_t now = millis();
+  if (refreshSequence && static_cast<uint32_t>(now - lastRefreshRequest) < 1500) return;
+  lastRefreshRequest = now;
+  ++refreshSequence;
+  BatteryDashboard_RefreshStarted();
+  Serial.printf("REQUEST BATTERY %lu\n", static_cast<unsigned long>(refreshSequence));
 }

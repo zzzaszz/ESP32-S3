@@ -24,6 +24,11 @@ void LCD_WriteData(uint8_t Data)
   digitalWrite(EXAMPLE_PIN_NUM_LCD_CS, HIGH);  
   LCDspi.endTransaction();
 }    
+void LCD_SetReversed(bool reversed) {
+  LCD_WriteCommand(0x36);
+  LCD_WriteData(reversed ? 0xA0 : 0x60);
+}
+
 void LCD_WriteData_Word(uint16_t Data)
 {
   LCDspi.beginTransaction(SPISettings(SPIFreq, MSBFIRST, SPI_MODE0));
@@ -67,8 +72,8 @@ void LCD_Init(void)
   delay(120);         
   LCD_WriteCommand(0x11);     
   delay(120);                //ms            
-  LCD_WriteCommand(0x36);     
-  LCD_WriteData(0x00);   
+  LCD_WriteCommand(0x36);
+  LCD_WriteData(0x60); // landscape: MV (swap axes) + MX (mirror columns)
 
   LCD_WriteCommand(0x3A);     
   LCD_WriteData(0x05);   

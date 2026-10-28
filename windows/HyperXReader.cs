@@ -19,6 +19,16 @@ public static class HyperXReader {
     [DllImport("hid.dll", SetLastError=true)]
     static extern bool HidD_SetOutputReport(SafeFileHandle handle, byte[] report, uint length);
 
+    // Accept only a response to the current GET, not an unrelated notification
+    // queued while Windows was opening the HID collections.
+    public static int ParseReply(byte[] data, int count, byte command) {
+        if (data == null || count < 7 || count > data.Length || data[0] != 0x0C || data[5] != command) return -1;
+        int value = data[6];
+        if (command == 0x06 && value <= 100) return value;
+        if (command == 0x48 && value <= 2) return value;
+        return -1;
+    }
+
     sealed class Endpoint : IDisposable {
         public FileStream Stream;
         public byte[] Buffer = new byte[512];
@@ -43,10 +53,20 @@ public static class HyperXReader {
                 } catch { handle.Dispose(); }
             }
             foreach (byte command in new byte[] { 0x06, 0x48 }) {
+                // Discard buffered reports before this request. All collections
+                // remain open so the reply can arrive on a different handle.
+                foreach (var endpoint in endpoints) {
+                    int drained = 0;
+                    while (endpoint.Pending != null && endpoint.Pending.IsCompleted && drained++ < 32) {
+                        try { endpoint.Pending.GetAwaiter().GetResult(); endpoint.Read(); }
+                        catch { endpoint.Pending = null; }
+                    }
+                }
                 byte[] request = new byte[64];
                 request[0]=0x0C; request[1]=2; request[2]=3; request[3]=1; request[5]=command;
                 bool sent = false;
                 foreach (var endpoint in endpoints) {
+                    // SET_REPORT Output (0x020C), verified with this USB receiver.
                     if (HidD_SetOutputReport(endpoint.Stream.SafeFileHandle, request, 64)) { sent=true; break; }
                 }
                 if (!sent) { result.Diagnostic += "GET " + command.ToString("X2") + " refused; "; continue; }
@@ -58,16 +78,11 @@ public static class HyperXReader {
                         try {
                             int count = endpoint.Pending.GetAwaiter().GetResult();
                             byte[] b = endpoint.Buffer;
-                            int kind=-1, value=-1;
-                            if (count>=7 && b[0]==0x0C) { kind=b[5]; value=b[6]; }
-                            if (count>=6 && b[0]==0x0D) {
-                                if (b[4]==1) { kind=6; value=b[5]; }
-                                if (b[4]==10) { kind=0x48; value=b[5]; }
-                            }
-                            if (kind==6 && value>=0 && value<=100) result.Level=value;
-                            if (kind==0x48 && value>=0 && value<=2) result.Charging=value;
-                            if (kind==command) {
-                                result.Diagnostic += "GET " + command.ToString("X2") + " reply=" + value + "; ";
+                            if (count >= 7 && b[0] == 0x0C && b[5] == command) {
+                                int value = ParseReply(b, count, command);
+                                if (command == 6) result.Level = value;
+                                else result.Charging = value;
+                                result.Diagnostic += "GET " + command.ToString("X2") + " raw=" + b[6] + "; ";
                                 answered=true;
                             }
                             endpoint.Read();

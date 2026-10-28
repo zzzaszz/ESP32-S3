@@ -2,8 +2,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 
-#define LCD_WIDTH   240 //LCD width
-#define LCD_HEIGHT  320 //LCD height
+#define LCD_WIDTH   320 // landscape width
+#define LCD_HEIGHT  240 // landscape height
 
 #define SPIFreq                        80000000
 #define EXAMPLE_PIN_NUM_MISO           -1
@@ -32,6 +32,7 @@ extern uint8_t LCD_Backlight;
 void LCD_SetCursor(uint16_t x1, uint16_t y1, uint16_t x2,uint16_t y2);
 
 void LCD_Init(void);
+void LCD_SetReversed(bool reversed);
 void LCD_SetCursor(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t  Yend);
 void LCD_addWindow(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yend,uint16_t* color);
 

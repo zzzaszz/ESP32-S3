@@ -32,9 +32,24 @@
 
 修复后的抓图位于本机会话临时目录：`%TEMP%\battery-after-page1.png`、`%TEMP%\battery-after-page2.png`。这些图来自实际 LVGL 输出像素，能证明固件确实绘制了内容；它们不等同 LCD 实物照片，无法验证玻璃屏幕色偏、触控手感或安装角度。
 
+## 2026-10-29 拉取最新版后复测
+
+按用户要求执行 `git pull --ff-only`，`master` 从 `0c4b7e0` fast-forward 到 `origin/master` / `4dcf9bb`，新增新版指标数据结构和 `docs/monitor-preview.html`。无本地未提交文件或冲突；新版本已实机重新编译、烧录、测试。
+
+| 项目 | 结果 |
+| --- | --- |
+| 最新版编译与烧录 | Arduino CLI `--warnings all` 通过；程序 1,234,672 字节（94%），全局变量 116,452 字节（35%）；esptool COM12 镜像哈希校验通过 |
+| 修复后的实际渲染 | 最新固件 PAGE 1 / PAGE 2 抓取到 94 色 / 607 亮像素与 59 色 / 185 亮像素；字库诊断 `fontBitmap=ready`。CPU、CPU TEMP、GPU、GPU TEMP、MEM、UP、DOWN 七项新版卡片全部有像素 |
+| 动画与方向 | NORMAL/REVERSED 两种方向各抓取两页，6 次连续滑动后均 `sliding=0` / `boundsErrors=0`；LVGL 输出缓冲非空 |
+| 硬件回归 | 电量 0/7/71/100/unknown、非法帧、BAT1 兼容、刷新完成/防抖/超时、独立过期通过；测试结束清除合成数据 |
+| 数据传输 | 最新桥按 10 个 PERF 字段发送 CPU temperature 与 MEM 等指标，实机 ACK 路径通过；AMD PMLog GPU edge 温度正常 |
+| 离线回归 | 13 个 PowerShell 脚本解析、AMD 读温度类编译、字体压缩兼容、数据解析/ACK/分包、HTTP/token 与清理通过 |
+
+本轮生成的 LVGL 输出抓图：`C:\Users\20878\AppData\Local\Temp\battery-render-test-29d2fae9dee046b49d1195dd845a56c2`。抓图是放大三倍的 framebuffer 像素，不是 LCD 拍照。
+
 ## 当前运行
 
-后台采集 PID `19260`，日志 `C:\Users\20878\AppData\Local\Temp\battery-panel-live-fixed-render.log`。未创建系统启动项，未提交、未推送。当前页面停留在第二页，便于现场直接确认。
+后台采集 PID `19260`，日志 `C:\Users\20878\AppData\Local\Temp\battery-panel-live-fixed-render.log`；USB 严格 ACK、2 秒轮询、自动方向诊断。当前页面停留在第二页，便于现场直接确认。未创建系统启动项。
 
 停止采集以释放串口：
 

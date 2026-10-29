@@ -194,7 +194,7 @@ function Get-ComputerPerformance {
         if ($disk.FreeSpace -ne $null) { $diskFreeGb = [uint32][Math]::Max(0, [Math]::Round($disk.FreeSpace / 1GB)) }
     } catch { }
     [PSCustomObject]@{
-        Cpu = $cpu; Memory = $memory; Gpu = $gpu; GpuTemperature = $gpuTemperature
+        Cpu = $cpu; CpuTemperature = $cpuTemperature; Memory = $memory; Gpu = $gpu; GpuTemperature = $gpuTemperature
         UploadKbps = $uploadKbps; DownloadKbps = $downloadKbps; DiskFreeGb = $diskFreeGb
         UptimeSeconds = $uptimeSeconds
     }

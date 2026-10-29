@@ -3,7 +3,7 @@
 ## 最新修正：第二页黑屏与滑动/翻转样式
 
 - 黑屏根因不是性能数据缺失：`battery_font_12.c` 之前是压缩字库（`bitmap_format=1`），而 `lv_conf.h` 关闭了解压（`LV_USE_FONT_COMPRESSED=0`），所以第二页全部标签有文本、有坐标，但实际像素为空。当前字库重新生成为非压缩格式（`bitmap_format=0`），并加入构建期兼容性检查，防止再次出现“有数据但不画字”。
-- 两页改为不透明卡片布局。监控页使用 2×4 卡片，CPU、内存、GPU 增加进度条；底部增加双色页码指示条，当前页更直观。
+- 两页采用深海军蓝底色、蓝色描边和青绿状态色，设备状态与大号数值分层显示。监控页使用 CPU 使用、CPU 温度、GPU 使用、GPU 温度、跨双列内存和网络指标卡，使用率保留进度条。
 - 左右横滑使用 180ms ease-out 位移动画，动画结束强制归位；连续滑动期间忽略重复触发，避免页面叠加、跳回或停在屏幕外。
 - 翻转前终止滑动并将页面归位，切换 LCD 方向后强制整屏刷新，再用 140ms 淡入恢复，减少黑帧和残影。显示方向与触控仍同步。
 - 新增实际绘制缓冲抓取和 PNG 转换。修复前第二页仅 29 种颜色、34 个亮像素；修复后为 59 种颜色、185 个亮像素，系统卡片和指标文字已真实输出。修复后的第一页为 94 种颜色、607 个亮像素。
@@ -14,7 +14,7 @@
 
 - AUTO 正反映射已依据当前板卡的实物反馈反向校准，显示和触控仍同步翻转。`ORIENTATION INVERT OFF` 表示使用已修正的板卡默认方向；`ON` 是在此基础上再反向。手动 NORMAL / REVERSED 不变。
 - 从电量页向左或向右滑都能进入 PC 监控，再次横滑返回。根屏幕和页面内容区均接入手势，事件处理后停止冒泡，避免一次滑动切换两次。
-- `UI?` 现在打印当前页、`monitorVisible`、性能数据年龄和八项渲染文字。`PAGE 1/2`、`SWIPE LEFT/RIGHT` 可诊断导航和显示逻辑；串口命令自测不替代实物触摸验收。
+- `UI?` 现在打印当前页、`monitorVisible`、性能数据年龄和七项渲染文字。`PAGE 1/2`、`SWIPE LEFT/RIGHT` 可诊断导航和显示逻辑；串口命令自测不替代实物触摸验收。
 - RX 6600 XT 温度从 AMD 驱动的只读 PMLog 接口获得，无需安装额外软件；无有效传感器时仍显示 `--`。页面温度明确是 **GPU 温度**，不冒充 CPU 温度。
 - 2026-10-28 23:17 实际链路得到 CPU 18%、内存 55%、GPU 10%、GPU 温度 57°C，板端 `page=1, monitorVisible=1, boundsErrors=0`，两台设备同时真实更新。该组为真实查询，之前 42/68/77/65 为显示测试夹具。
 
@@ -217,7 +217,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [HaloBattery Cloud III S 实现与说明](https://github.com/HeyOkay/HaloBattery/blob/main/providers/hyperx_cloud3s.py)
 - [Cloud III S Windows Output Report 适配记录](https://github.com/HeyOkay/HaloBattery/pull/123)
 
-双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。电脑性能帧为 `PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec`；GPU 或温度不可用时使用 `-1`。
+双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。电脑性能帧为 `PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec,cpuTemp`；CPU 温度字段追加在末尾，旧格式帧仍可解析，缺失温度显示 `--`。PC 监控页按 CPU 使用、CPU 温度、GPU 使用、GPU 温度、跨双列内存、网络上传/下载排列，不显示磁盘和运行时间；找不到明确标记 CPU/Processor/Package/Core 的 Windows ACPI 热区时保持未知，不以主板或 GPU 温度代替。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -284,7 +284,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 
 ### 第 5 步：交互与屏幕设置
 
-- [x] 保留 CST328/CST3530 自动探测和 LVGL 指针输入；移除 `MONITOR`、`LOCK`、`BACK`，改为左右滑切页；性能页显示 CPU、内存、GPU、GPU 温度、网络、磁盘和运行时间。
+- [x] 保留 CST328/CST3530 自动探测和 LVGL 指针输入；移除 `MONITOR`、`LOCK`、`BACK`，改为左右滑切页；性能页显示 CPU 使用、CPU 温度、GPU 使用、GPU 温度、跨双列内存和网络，移除磁盘与运行时间。
 - [ ] 实机核对产品背面标签，确认横屏触控坐标、左右切页、下滑读取和小刷新按钮；V2 使用 CST3530，V1 使用 CST328。
 - [x] 增加串口亮度设置 `BRIGHTNESS 0-100` / 查询 `BRIGHTNESS?`，设置写入 ESP32 NVS，开机恢复；输入 `HELP` 或 `?` 可查看 Wi-Fi、token、亮度、版本、健康状态和数据帧命令，`VERSION?` 返回当前协议版本；熄屏/唤醒仍待触控版本确认。
 - [x] 新增手动读取及读取中/更新/超时反馈，通过序号通知 Windows 提前查询，LVGL 线程不做阻塞 HID / G HUB 调用。
@@ -327,8 +327,8 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 ## 验收清单
 
 - [ ] 耳机真实电量与 NGENUITY 或耳机语音报告交叉核对（允许设备自身刷新延迟）。
-- [ ] 鼠标真实电量与 G HUB 同时刻读数核对。
-- [ ] 插入/拔出充电线，状态正确变化；未知充电状态不被误判。
+- [x] 鼠标真实电量与 G HUB 同时刻读数核对。
+- [x] 插入/拔出充电线，状态正确变化；未知充电状态不被误判。
 - [ ] 关闭耳机、退出 G HUB、断开串口、断网，分别验证未知/过期表现。
 - [ ] 非法帧、越界百分比、错误设备编号不改变界面。
 - [ ] 耳机与鼠标独立过期，旧 `BAT1` 鼠标帧仍可接收。

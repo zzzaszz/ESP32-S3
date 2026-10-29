@@ -73,7 +73,7 @@ if ($ValidationOnly) {
     $ackCases = @(
         [PSCustomObject]@{ Frame = 'BAT2,1,71,1,0'; Ack = 'ACK BAT2 1 71' },
         [PSCustomObject]@{ Frame = 'BAT2,0,-1,0,-1'; Ack = 'ACK BAT2 0 -1' },
-        [PSCustomObject]@{ Frame = 'PERF,42,68,77,65,12,345,128,86400'; Ack = 'ACK PERF 42 68 77 65' }
+        [PSCustomObject]@{ Frame = 'PERF,42,68,77,65,12,345,128,86400,55'; Ack = 'ACK PERF 42 68 77 65' }
     )
     foreach ($ackCase in $ackCases) {
         $actualAck = Get-PanelAck $ackCase.Frame
@@ -221,7 +221,7 @@ try {
             throw ("Unexpected token header on frame {0}." -f $index)
         }
     }
-    if ($frames[2].Body -notmatch '^PERF,-?\d+,-?\d+,-?\d+,-?\d+,\d+,\d+,\d+,\d+$') {
+    if ($frames[2].Body -ne 'PERF,42,68,77,65,12,345,128,86400,55') {
         throw ("Unexpected performance frame: {0}" -f $frames[2].Body)
     }
     if ($frames[2].Token -ne $(if ($WithToken) { $token } else { '' })) {

@@ -139,11 +139,18 @@ function Invoke-GHubGet($Socket, [string]$Path) {
 }
 
 function Get-ComputerPerformance {
-    $cpu = -1; $memory = -1; $gpu = -1; $gpuTemperature = -1
+    $cpu = -1; $cpuTemperature = -1; $memory = -1; $gpu = -1; $gpuTemperature = -1
     $uploadKbps = 0; $downloadKbps = 0; $diskFreeGb = 0; $uptimeSeconds = 0
     try {
         $sample = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop
         $cpu = [Math]::Max(0, [Math]::Min(100, [int][Math]::Round($sample.CounterSamples[0].CookedValue)))
+    } catch { }
+    try {
+        $zones = @(Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop |
+            Where-Object { $_.CurrentTemperature -gt 0 -and $_.InstanceName -match 'CPU|PROC|TCPU|PACKAGE|CORE' } |
+            ForEach-Object { [int][Math]::Round(($_.CurrentTemperature / 10) - 273.15) } |
+            Where-Object { $_ -ge 0 -and $_ -le 150 })
+        if ($zones.Count) { $cpuTemperature = $zones[0] }
     } catch { }
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
@@ -262,7 +269,7 @@ try {
             $level = -1; $connected = 0; $charging = -1
             $headsetLevel = -1; $headsetConnected = 0; $headsetCharging = -1
             $performance = [PSCustomObject]@{
-                Cpu = 42; Memory = 68; Gpu = 77; GpuTemperature = 65
+                Cpu = 42; CpuTemperature = 55; Memory = 68; Gpu = 77; GpuTemperature = 65
                 UploadKbps = 12; DownloadKbps = 345; DiskFreeGb = 128; UptimeSeconds = 86400
             }
         } else {
@@ -315,10 +322,10 @@ try {
                 $lastPerformancePoll = [DateTime]::UtcNow
             }
         }
-        $performanceFrame = "PERF,{0},{1},{2},{3},{4},{5},{6},{7}" -f `
+        $performanceFrame = "PERF,{0},{1},{2},{3},{4},{5},{6},{7},{8}" -f `
             $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
             $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb,
-            $performance.UptimeSeconds
+            $performance.UptimeSeconds, $performance.CpuTemperature
         $frames = @($performanceFrame)
         if ($OfflineTestMode) { $frames = @("BAT2,1,$level,$connected,$charging", "BAT2,0,$headsetLevel,$headsetConnected,$headsetCharging", $performanceFrame) }
         foreach ($frame in $frames) {
@@ -346,9 +353,9 @@ try {
         }
         Write-Host ("{0:HH:mm:ss} PRO Wireless: {1}% connected={2} charging={3}" -f (Get-Date), $level, $connected, $charging)
         Write-Host ("{0:HH:mm:ss} HyperX Cloud III S: {1}% connected={2} charging={3}" -f (Get-Date), $headsetLevel, $headsetConnected, $headsetCharging)
-        Write-Host ("{0:HH:mm:ss} PC: cpu={1}% memory={2}% gpu={3}% gpuTemp={4}C netUp={5}KB/s netDown={6}KB/s diskFree={7}GB uptime={8}s" -f
-            (Get-Date), $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
-            $performance.UploadKbps, $performance.DownloadKbps, $performance.DiskFreeGb, $performance.UptimeSeconds)
+        Write-Host ("{0:HH:mm:ss} PC: cpu={1}% cpuTemp={2}C memory={3}% gpu={4}% gpuTemp={5}C netUp={6}KB/s netDown={7}KB/s" -f
+            (Get-Date), $performance.Cpu, $performance.CpuTemperature, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
+            $performance.UploadKbps, $performance.DownloadKbps)
         if (-not $Once) {
             # Interval is measured from query start; expensive counters no longer
             # add a second full interval after each collection.

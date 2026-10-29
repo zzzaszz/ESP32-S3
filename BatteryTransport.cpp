@@ -146,20 +146,27 @@ static void printHelp() {
   Serial.println("HELP ORIENTATION INVERT ON|OFF");
   Serial.println("HELP BAT2,device,level,connected,charging");
   Serial.println("HELP BAT1,level,connected,charging");
-  Serial.println("HELP PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec");
+  Serial.println("HELP PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec,cpuTemp");
 }
 
 static bool applyPerformanceFrame(const String &frame, bool wifi) {
-  long cpu, memory, gpu, gpuTemperature;
+  long cpu, memory, gpu, gpuTemperature, cpuTemperature = -1;
   unsigned long uploadKbps, downloadKbps, diskFreeGb, uptimeSeconds;
   int consumed = 0;
-  const int fields = sscanf(frame.c_str(), "PERF,%ld,%ld,%ld,%ld,%lu,%lu,%lu,%lu%n",
+  int fields = sscanf(frame.c_str(), "PERF,%ld,%ld,%ld,%ld,%lu,%lu,%lu,%lu,%ld%n",
                             &cpu, &memory, &gpu, &gpuTemperature, &uploadKbps,
-                            &downloadKbps, &diskFreeGb, &uptimeSeconds, &consumed);
-  if (fields != 8 || consumed != static_cast<int>(frame.length()) ||
+                            &downloadKbps, &diskFreeGb, &uptimeSeconds, &cpuTemperature, &consumed);
+  if (fields == 8) {
+    consumed = 0;
+    fields = sscanf(frame.c_str(), "PERF,%ld,%ld,%ld,%ld,%lu,%lu,%lu,%lu%n",
+                    &cpu, &memory, &gpu, &gpuTemperature, &uploadKbps,
+                    &downloadKbps, &diskFreeGb, &uptimeSeconds, &consumed);
+  }
+  if ((fields != 8 && fields != 9) || consumed != static_cast<int>(frame.length()) ||
       cpu < -1 || cpu > 100 || memory < -1 || memory > 100 || gpu < -1 || gpu > 100 ||
-      gpuTemperature < -1 || gpuTemperature > 150) return false;
-  BatteryDashboard_UpdatePerformance(static_cast<int>(cpu), static_cast<int>(memory),
+      gpuTemperature < -1 || gpuTemperature > 150 || cpuTemperature < -1 || cpuTemperature > 150) return false;
+  BatteryDashboard_UpdatePerformance(static_cast<int>(cpu), static_cast<int>(cpuTemperature),
+                                     static_cast<int>(memory),
                                      static_cast<int>(gpu), static_cast<int>(gpuTemperature),
                                      static_cast<uint32_t>(uploadKbps),
                                      static_cast<uint32_t>(downloadKbps),
@@ -357,6 +364,7 @@ void BatteryTransport_Loop() {
   if (connected != wifiConnected) {
     wifiConnected = connected;
     BatteryDashboard_SetNetwork(connected);
+    if (connected) configTzTime("CST-8", "pool.ntp.org", "time.nist.gov");
     Serial.println(connected ? "WIFI CONNECTED" : "WIFI DISCONNECTED");
   }
   if (connected) {

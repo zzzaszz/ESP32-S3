@@ -27,7 +27,7 @@ function Save-Render([int]$Page, [string]$Name) {
 }
 try {
     $null = Send-RenderCommand 'ORIENTATION NORMAL'
-    $null = Send-RenderCommand 'PERF,42,68,77,65,12,345,128,86400'
+    $null = Send-RenderCommand 'PERF,42,68,77,65,12,345,128,86400,55'
     $null = Send-RenderCommand 'BAT2,0,93,1,0'
     $null = Send-RenderCommand 'BAT2,1,63,1,0'
     $null = Send-RenderCommand 'PAGE 1'

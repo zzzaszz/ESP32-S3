@@ -9,6 +9,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <stdlib.h>
+#include <sys/time.h>
 
 static WebServer server(80);
 static String serialLine;
@@ -144,9 +145,25 @@ static void printHelp() {
   Serial.println("HELP PAGE 1|2 or SWIPE LEFT|RIGHT");
   Serial.println("HELP ORIENTATION? or ORIENTATION AUTO|NORMAL|REVERSED|TEST");
   Serial.println("HELP ORIENTATION INVERT ON|OFF");
+  Serial.println("HELP TIME,<unix seconds>");
   Serial.println("HELP BAT2,device,level,connected,charging");
   Serial.println("HELP BAT1,level,connected,charging");
   Serial.println("HELP PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec,cpuTemp");
+}
+
+// Sets the local wall-clock from a USB TIME frame; Wi-Fi NTP remains an
+// alternative source when connected. Keeps the same CST-8 zone in both cases.
+static bool applyTimeFrame(const String &frame) {
+  long epoch = 0;
+  int consumed = 0;
+  if (sscanf(frame.c_str(), "TIME,%ld%n", &epoch, &consumed) != 1 ||
+      consumed != static_cast<int>(frame.length()) || epoch < 0) return false;
+  struct timeval tv;
+  tv.tv_sec = static_cast<time_t>(epoch);
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) return false;
+  Serial.printf("ACK TIME %ld\n", epoch);
+  return true;
 }
 
 static bool applyPerformanceFrame(const String &frame, bool wifi) {
@@ -262,6 +279,11 @@ static bool applyFrame(const String &frame, bool wifi = false) {
 }
 
 void BatteryTransport_Init() {
+  // Local wall-clock time is set from USB TIME frames (or NTP over Wi-Fi);
+  // the zone is fixed to CST-8 regardless of transport so the clock renders
+  // the same value whether or not Wi-Fi connects.
+  setenv("TZ", "CST-8", 1);
+  tzset();
   // Wi-Fi credentials stay in NVS and are supplied through USB, never in source.
   preferencesReady = preferences.begin("battery-panel", false);
   if (preferencesReady) {
@@ -308,6 +330,8 @@ void BatteryTransport_Loop() {
         BatteryDashboard_PrintDiagnostics();
       } else if (serialLine == "FRAME?") {
         Lvgl_PrintFrame();
+      } else if (serialLine.startsWith("TIME,")) {
+        if (!applyTimeFrame(serialLine)) Serial.println("ERR TIME FORMAT");
       } else if (BatteryDashboard_Command(serialLine.c_str())) {
         // Page diagnostics exercise the same navigation path as gestures.
       } else if (DisplayOrientation_Command(serialLine.c_str())) {

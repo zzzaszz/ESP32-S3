@@ -12,6 +12,7 @@ function Read-PanelOutput($Serial) {
 }
 
 function Get-PanelAck([string]$Frame) {
+    if ($Frame -match '^TIME,(\d+)$') { return "ACK TIME $($Matches[1])" }
     if ($Frame -match '^BAT2,(\d+),(-?\d+),') { return "ACK BAT2 $($Matches[1]) $($Matches[2])" }
     if ($Frame -match '^PERF,(-?\d+),(-?\d+),(-?\d+),(-?\d+),') {
         return "ACK PERF $($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])"

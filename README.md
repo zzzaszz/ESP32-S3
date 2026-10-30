@@ -218,7 +218,7 @@ LVGL 页面放在普通 `.cpp` 中，主 `.ino` 只保留初始化和循环，�
 - [HaloBattery Cloud III S 实现与说明](https://github.com/HeyOkay/HaloBattery/blob/main/providers/hyperx_cloud3s.py)
 - [Cloud III S Windows Output Report 适配记录](https://github.com/HeyOkay/HaloBattery/pull/123)
 
-双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。电脑性能帧为 `PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec,cpuTemp`；CPU 温度字段追加在末尾，旧格式帧仍可解析，缺失温度显示 `--`。PC 监控页按 CPU 使用、CPU 温度、GPU 使用、GPU 温度、跨双列内存、网络上传/下载排列，不显示磁盘和运行时间；找不到明确标记 CPU/Processor/Package/Core 的 Windows ACPI 热区时保持未知，不以主板或 GPU 温度代替。
+双设备数据帧：`BAT2,device,level,connected,charging`，串口以换行结束。电脑性能帧为 `PERF,cpu,memory,gpu,gpuTemp,upKbps,downKbps,diskFreeGb,uptimeSec,cpuTemp`；CPU 温度字段追加在末尾，旧格式帧仍可解析，缺失温度显示 `--`。PC 监控页按 CPU 使用、CPU 温度、GPU 使用、GPU 温度、跨双列内存、网络上传/下载排列，不显示磁盘和运行时间；找不到明确标记 CPU/Processor/Package/Core 的 Windows ACPI 热区时保持未知，不以主板或 GPU 温度代替。时钟帧为 `TIME,<unix秒>`（UTC epoch），由 USB 采集桥每 30 秒推送一次，固件按 CST-8 显示；Wi-Fi 连接时 NTP 仍可独立校准，两种来源互不冲突。板载无 RTC 电池，重启后需等待下一条 TIME 帧才会恢复时钟。
 
 | 字段 | 含义 |
 | --- | --- |

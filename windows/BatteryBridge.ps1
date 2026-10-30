@@ -238,6 +238,7 @@ function Send-PanelFrame([string]$Frame) {
 $serial = $null
 $performance = $null
 $lastPerformancePoll = [DateTime]::MinValue
+$lastTimeSync = [DateTime]::MinValue
 $hyperXPaths = @()
 $lastHidDiscovery = [DateTime]::MinValue
 $transcriptStarted = $false
@@ -321,6 +322,13 @@ try {
                 $performance = Get-ComputerPerformance
                 $lastPerformancePoll = [DateTime]::UtcNow
             }
+        }
+        # Wall-clock sync: the panel has no RTC battery, so the USB bridge
+        # pushes a UTC epoch every 30 seconds; the firmware applies CST-8.
+        if (-not $PanelUrl -and ([DateTime]::UtcNow - $lastTimeSync).TotalSeconds -ge 30) {
+            $timeFrame = 'TIME,{0}' -f [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            if (-not (Send-PanelFrame $timeFrame)) { $sendFailed = $true }
+            $lastTimeSync = [DateTime]::UtcNow
         }
         $performanceFrame = "PERF,{0},{1},{2},{3},{4},{5},{6},{7},{8}" -f `
             $performance.Cpu, $performance.Memory, $performance.Gpu, $performance.GpuTemperature,
